@@ -1,0 +1,175 @@
+import json
+import re
+import asyncio
+import time
+from typing import Optional, List
+from bs4 import BeautifulSoup
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from app.core.models import IngestPayload, CreatorInfo, Post, AIEnrichment, Platform
+from app.ai.analyzer import categorize_creator
+
+def get_uc_options():
+    options = uc.ChromeOptions()
+    options.headless = True
+    options.add_argument('--disable-gpu')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    return options
+
+def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
+    if username.startswith('@'):
+        username = username[1:]
+        
+    url = f"https://www.tiktok.com/@{username}"
+    
+    driver = None
+    try:
+        try:
+            driver = uc.Chrome(options=get_uc_options())
+        except Exception as e:
+            if "version_main" not in str(e).lower() and "supports chrome version" in str(e).lower():
+                match = re.search(r'Current browser version is (\d+)', str(e))
+                if match:
+                    version = int(match.group(1))
+                    driver = uc.Chrome(options=get_uc_options(), version_main=version)
+                else:
+                    driver = uc.Chrome(options=get_uc_options(), version_main=152)
+            else:
+                raise e
+                
+        driver.set_page_load_timeout(30)
+        driver.get(url)
+        
+        try:
+            WebDriverWait(driver, 10).until(
+                lambda d: d.find_element(By.ID, '__UNIVERSAL_DATA_FOR_REHYDRATION__') or 
+                          d.find_element(By.CSS_SELECTOR, '[data-e2e="user-title"]')
+            )
+        except Exception:
+            pass
+            
+        for _ in range(3):
+            driver.execute_script("window.scrollBy(0, 1500);")
+            time.sleep(1.5)
+            
+        content = driver.page_source
+        soup = BeautifulSoup(content, 'html.parser')
+        script_tag = soup.find('script', id='__UNIVERSAL_DATA_FOR_REHYDRATION__')
+        
+        if not script_tag:
+            return None
+            
+        raw_data = script_tag.string
+        data = json.loads(raw_data)
+        with open("data/dump.json", "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2))
+        
+        user_module = data.get('__DEFAULT_SCOPE__', {}).get('webapp.user-detail', {}).get('userInfo', {})
+        stats_module = user_module.get('stats', {})
+        user_info = user_module.get('user', {})
+
+        if not user_info:
+             return None
+
+        external_id = str(user_info.get('id', ''))
+        followers = int(stats_module.get('followerCount', 0))
+        
+        signature = user_info.get('signature', '')
+        
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', signature)
+        public_email = email_match.group(0) if email_match else None
+        
+        phone_match = re.search(r'(?:\+?84|0)(?:\s|\.)?\d{2,3}(?:\s|\.)?\d{3}(?:\s|\.)?\d{3,4}', signature)
+        public_phone = phone_match.group(0) if phone_match else None
+
+        creator_info = CreatorInfo(
+            platform=Platform.TIKTOK,
+            externalId=external_id,
+            username=f"@{username}",
+            displayName=user_info.get('nickname', username),
+            profileUrl=url,
+            avatarUrl=user_info.get('avatarLarger', user_info.get('avatarMedium')),
+            followers=followers,
+            bio=signature,
+            publicEmail=public_email,
+            publicPhone=public_phone
+        )
+
+        video_elements = soup.find_all('div', attrs={'data-e2e': 'user-post-item'})
+        recent_posts: List[Post] = []
+        recent_videos_for_ai: List[str] = []
+        
+        for idx, el in enumerate(video_elements):
+            if len(recent_posts) >= 3:
+                break
+                
+            views = 0
+            view_tag = el.find('strong', attrs={'data-e2e': 'video-views'})
+            if view_tag and view_tag.text:
+                view_text = view_tag.text.strip().upper()
+                multiplier = 1
+                if 'K' in view_text: multiplier = 1000
+                elif 'M' in view_text: multiplier = 1000000
+                elif 'B' in view_text: multiplier = 1000000000
+                try:
+                    num_val = float(re.sub(r'[^0-9\.]', '', view_text))
+                    views = int(num_val * multiplier)
+                except:
+                    pass
+            
+            title = ""
+            img_tag = el.find('img')
+            if img_tag and img_tag.get('alt'):
+                title = img_tag.get('alt').strip()
+            else:
+                a_tag = el.find('a', title=True)
+                if a_tag and a_tag.get('title'):
+                    title = a_tag.get('title').strip()
+                    
+            if title:
+                recent_videos_for_ai.append(title)
+                
+            post_link_tag = el.find('a', href=True)
+            post_url = post_link_tag['href'] if post_link_tag else f"{url}/video/unknown_{idx}"
+            
+            recent_posts.append(Post(
+                platformPostId=post_url.split('/')[-1] if 'video/' in post_url else f"unknown_{idx}",
+                postUrl=post_url,
+                caption=title,
+                views=views,
+                likes=0,  # Not easily extractable from profile DOM without clicking
+                comments=0,
+                shares=0
+            ))
+
+        ai_categories = categorize_creator(signature, recent_videos_for_ai)
+        ai_enrichment = None
+        if ai_categories:
+            ai_enrichment = AIEnrichment(
+                tags=ai_categories,
+                # In a real scenario, we might want Gemini to return structured JSON 
+                # mapping to niche, category, creatorType. 
+                # For now, we put the first tag as niche/category.
+                niche=ai_categories[0] if len(ai_categories) > 0 else None,
+                category=ai_categories[1] if len(ai_categories) > 1 else None,
+            )
+
+        return IngestPayload(
+            creator=creator_info,
+            recentPosts=recent_posts,
+            aiEnrichment=ai_enrichment,
+            source="UNDETECTED_CHROMEDRIVER_TIKTOK"
+        )
+
+    except Exception as e:
+        print(f"Error crawling TikTok for {username}: {e}")
+        return None
+    finally:
+        if driver:
+            driver.quit()
+
+async def crawl_tiktok_profile(username: str) -> Optional[IngestPayload]:
+    return await asyncio.to_thread(_crawl_tiktok_profile_sync, username)

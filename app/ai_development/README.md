@@ -24,18 +24,32 @@ Trong file này, ta dùng class `CreatorLabel(BaseModel)` của thư viện `pyd
 Nếu điểm tự tin >= 9, ta giữ lại làm tài liệu để học. 
 Nếu điểm tự tin < 9, dòng code `df_clean = df[df['confidence_score'] >= 9]` sẽ thẳng tay xóa Creator đó. Nhờ vậy, file output cuối cùng (Tập huấn luyện của bạn) sẽ sạch sẽ 100%.
 
-## Cách chạy thử code
-1. Mở Terminal (Command Prompt) tại gốc dự án (folder chứa file `.env`).
-2. Cài đặt các thư viện cần thiết (nếu chưa có):
+## Hướng dẫn chạy thử code (Run Sandbox)
+Để chạy code trong thư mục này, bạn hãy làm theo các bước sau:
+
+**Bước 1: Chuẩn bị Terminal và Thư viện**
+1. Mở Terminal (Command Prompt hoặc PowerShell).
+2. Cài đặt các thư viện cần thiết cho cả 2 bước:
    ```bash
-   pip install pandas pydantic google-generativeai python-dotenv
+   pip install pandas pydantic google-generativeai python-dotenv sentence-transformers scikit-learn numpy joblib
    ```
-3. Chuyển vào thư mục này:
+3. Chuyển vào thư mục Sandbox này:
    ```bash
    cd app/ai_development
    ```
-4. Chạy file script:
-   ```bash
-   python 1_auto_label.py
-   ```
-5. Sau khi code chạy xong, bạn sẽ thấy một file mới tên là `labeled_clean_data.csv` xuất hiện. Mở file đó ra xem thành quả AI tự dán nhãn nhé!
+
+**Bước 2: Chạy Script Gán Nhãn Tự Động (Auto-Labeling)**
+Chạy lệnh sau để dùng Gemini gán nhãn cho dữ liệu thô:
+```bash
+python 1_auto_label.py
+```
+-> *Kết quả:* Một file `labeled_clean_data.csv` sẽ xuất hiện chứa dữ liệu chuẩn bị đem đi huấn luyện.
+
+**Bước 3: Chạy Script Huấn luyện Mô Hình (Model Training)**
+Chạy lệnh sau để máy tính tự học từ file CSV trên và tạo ra AI của riêng bạn:
+```bash
+python 2_train_model.py
+```
+*(Ghi chú: Lần chạy đầu tiên sẽ mất khoảng vài chục giây để máy tính tải thư viện ngôn ngữ NLP về. Các lần sau sẽ chạy chớp nhoáng trong 1 mili-giây).*
+
+-> *Kết quả:* Hai file `creator_category_model.joblib` (Trí não AI) và `scaler.joblib` (Bộ chuẩn hóa số liệu) sẽ được lưu ra thư mục này. Chúc mừng bạn đã có mô hình AI nhà trồng đầu tiên!

@@ -27,9 +27,13 @@ def categorize_creator(bio: str, recent_videos: List[str]) -> List[str]:
     
     prompt = f"""
     You are an expert at analyzing TikTok/YouTube creator profiles. 
-    Analyze the following creator profile and classify them into 1 to 3 content categories.
-    Return ONLY a comma-separated list of categories in Vietnamese (e.g., Công nghệ, Thời trang, Ẩm thực, Giải trí, Giáo dục, Đời sống).
-    Do not return any other text.
+    Analyze the following creator profile and classify them.
+    First, determine if this account is a "BRAND" (an official store/brand selling products), a "KOC/KOL" (reviewer, influencer, creator), or a "NORMAL_USER" (just playing around).
+    Then, provide 1 to 2 content categories (e.g., Công nghệ, Thời trang, Ẩm thực).
+    
+    Return ONLY a comma-separated list where the FIRST item is the Creator Type (BRAND, KOC, KOL, NORMAL_USER), and the subsequent items are categories.
+    Example: BRAND, Thời trang, Mỹ phẩm
+    Example: KOC, Công nghệ, Đời sống
     
     Creator Bio:
     {bio}

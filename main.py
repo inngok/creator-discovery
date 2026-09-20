@@ -54,6 +54,15 @@ async def crawl_tiktok(username: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to crawl TikTok: {e}")
 
+@app.post("/api/v1/crawl/tiktok/enqueue")
+async def enqueue_tiktok(username: str):
+    try:
+        from app.workers.tasks import process_tiktok_profile
+        process_tiktok_profile.delay(username)
+        return {"status": "success", "message": f"Đã đưa {username} vào hàng đợi Celery! Hệ thống sẽ cào và gửi sang Java tự động."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

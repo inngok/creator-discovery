@@ -20,6 +20,12 @@ def get_uc_options():
     return options
 
 def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
+    username = username.strip()
+    if "tiktok.com" in username:
+        match = re.search(r'tiktok\.com/@?([^/?&#]+)', username)
+        if match:
+            username = match.group(1)
+            
     if username.startswith('@'):
         username = username[1:]
         

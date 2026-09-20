@@ -22,3 +22,7 @@ Sau khi chạy hệ thống, mở trình duyệt và truy cập:
 Sửa file `.env` nếu cần thiết:
 - `GEMINI_API_KEY`: Bắt buộc phải có để phân loại KOC/KOL.
 - `JAVA_BACKEND_URL`: Đường link để ném kết quả JSON sang cho team Java.
+
+
+.\start_all.bat
+.\stop_all.bat

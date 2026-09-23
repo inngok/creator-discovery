@@ -20,6 +20,12 @@ def get_uc_options():
     return options
 
 def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
+    username = username.strip()
+    if "tiktok.com" in username:
+        match = re.search(r'tiktok\.com/@?([^/?&#]+)', username)
+        if match:
+            username = match.group(1)
+            
     if username.startswith('@'):
         username = username[1:]
         
@@ -77,6 +83,10 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
         external_id = str(user_info.get('id', ''))
         followers = int(stats_module.get('followerCount', 0))
         
+        if followers < 7000:
+            print(f"Skipping {username}: only {followers} followers (needs >= 7000)")
+            return None
+        
         signature = user_info.get('signature', '')
         
         email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', signature)
@@ -102,24 +112,12 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
         recent_posts: List[Post] = []
         recent_videos_for_ai: List[str] = []
         
+        # 1. Trích xuất URL và tiêu đề của 3 video gần nhất
+        videos_to_fetch = []
         for idx, el in enumerate(video_elements):
-            if len(recent_posts) >= 3:
+            if len(videos_to_fetch) >= 3:
                 break
                 
-            views = 0
-            view_tag = el.find('strong', attrs={'data-e2e': 'video-views'})
-            if view_tag and view_tag.text:
-                view_text = view_tag.text.strip().upper()
-                multiplier = 1
-                if 'K' in view_text: multiplier = 1000
-                elif 'M' in view_text: multiplier = 1000000
-                elif 'B' in view_text: multiplier = 1000000000
-                try:
-                    num_val = float(re.sub(r'[^0-9\.]', '', view_text))
-                    views = int(num_val * multiplier)
-                except:
-                    pass
-            
             title = ""
             img_tag = el.find('img')
             if img_tag and img_tag.get('alt'):
@@ -135,26 +133,91 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
             post_link_tag = el.find('a', href=True)
             post_url = post_link_tag['href'] if post_link_tag else f"{url}/video/unknown_{idx}"
             
+            # Khôi phục số view cơ bản đề phòng video không load được
+            views = 0
+            view_tag = el.find('strong', attrs={'data-e2e': 'video-views'})
+            if view_tag and view_tag.text:
+                view_text = view_tag.text.strip().upper()
+                multiplier = 1
+                if 'K' in view_text: multiplier = 1000
+                elif 'M' in view_text: multiplier = 1000000
+                elif 'B' in view_text: multiplier = 1000000000
+                try:
+                    num_val = float(re.sub(r'[^0-9\.]', '', view_text))
+                    views = int(num_val * multiplier)
+                except:
+                    pass
+            
+            videos_to_fetch.append({
+                "url": post_url,
+                "title": title,
+                "views": views,
+                "id": post_url.split('/')[-1] if 'video/' in post_url else f"unknown_{idx}"
+            })
+            
+        # 2. Truy cập từng trang video để lấy thông tin chi tiết
+        from datetime import datetime, timezone
+        for video in videos_to_fetch:
+            posted_at = None
+            likes = 0
+            comments = 0
+            shares = 0
+            views = video["views"] # Mặc định dùng views ước lượng từ ngoài profile
+            
+            try:
+                if "unknown" not in video["id"]:
+                    driver.get(video["url"])
+                    time.sleep(2) # Chờ video page tải HTML ban đầu
+                    
+                    video_soup = BeautifulSoup(driver.page_source, 'html.parser')
+                    script_tag_vid = video_soup.find('script', id='__UNIVERSAL_DATA_FOR_REHYDRATION__')
+                    
+                    if script_tag_vid:
+                        vid_data = json.loads(script_tag_vid.string)
+                        item_module = vid_data.get('__DEFAULT_SCOPE__', {}).get('webapp.video-detail', {}).get('itemInfo', {}).get('itemStruct', {})
+                        
+                        if item_module:
+                            create_time = item_module.get('createTime')
+                            if create_time:
+                                dt = datetime.fromtimestamp(int(create_time), tz=timezone.utc)
+                                posted_at = dt.isoformat()
+                                
+                            stats = item_module.get('stats', {})
+                            likes = int(stats.get('diggCount', 0))
+                            comments = int(stats.get('commentCount', 0))
+                            shares = int(stats.get('shareCount', 0))
+                            
+                            # Số view chính xác từ API JSON
+                            if stats.get('playCount'):
+                                views = int(stats.get('playCount', 0))
+            except Exception as e:
+                print(f"Error fetching detailed video metrics for {video['url']}: {e}")
+                
             recent_posts.append(Post(
-                platformPostId=post_url.split('/')[-1] if 'video/' in post_url else f"unknown_{idx}",
-                postUrl=post_url,
-                caption=title,
+                platformPostId=video["id"],
+                postUrl=video["url"],
+                caption=video["title"],
                 views=views,
-                likes=0,  # Not easily extractable from profile DOM without clicking
-                comments=0,
-                shares=0
+                likes=likes,
+                comments=comments,
+                shares=shares,
+                postedAt=posted_at
             ))
 
         ai_categories = categorize_creator(signature, recent_videos_for_ai)
         ai_enrichment = None
         if ai_categories:
+            creator_type = ai_categories[0].strip().upper()
+            
+            if creator_type in ["BRAND", "NORMAL_USER", "STORE"]:
+                print(f"Skipping {username}: AI classified as {creator_type}")
+                return None
+                
             ai_enrichment = AIEnrichment(
-                tags=ai_categories,
-                # In a real scenario, we might want Gemini to return structured JSON 
-                # mapping to niche, category, creatorType. 
-                # For now, we put the first tag as niche/category.
-                niche=ai_categories[0] if len(ai_categories) > 0 else None,
-                category=ai_categories[1] if len(ai_categories) > 1 else None,
+                tags=ai_categories[1:],
+                creatorType=creator_type,
+                niche=ai_categories[1] if len(ai_categories) > 1 else None,
+                category=ai_categories[2] if len(ai_categories) > 2 else None,
             )
 
         return IngestPayload(

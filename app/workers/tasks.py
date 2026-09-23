@@ -10,19 +10,78 @@ def process_tiktok_profile(self, username: str):
         result = _crawl_tiktok_profile_sync(username)
         
         if result:
-            # BỘ LỌC KOC/KOL VIP: Chỉ lưu những người có trên 100.000 Followers
-            if result.creator.followers >= 100000:
-                # LƯU TẠM DỮ LIỆU ĐỂ DỄ KIỂM TRA
-                with open("data/crawled_results.jsonl", "a", encoding="utf-8") as f:
-                    f.write(json.dumps(result.model_dump(mode='json'), ensure_ascii=False) + "\n")
-                    
-                # In ra màn hình (bỏ qua lỗi font chữ tiếng Việt trên Terminal)
-                safe_category = str(result.aiEnrichment.tags if result.aiEnrichment else []).encode('ascii', 'ignore').decode()
-                print(f"[WORKER] SUCCESS (KOL/KOC): {username} - {result.creator.followers} Followers. Niche: {safe_category}")
-            else:
-                print(f"[WORKER] SKIPPED (Bỏ qua): {username} chỉ có {result.creator.followers} Followers (không phải KOL).")
+            with open("data/crawled_results.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(result.model_dump(mode='json'), ensure_ascii=False) + "\n")
                 
-            # Later: POST to Java backend using httpx/requests
+            safe_category = str(result.aiEnrichment.tags if result.aiEnrichment else []).encode('ascii', 'ignore').decode()
+            print(f"[WORKER] SUCCESS: {username} - {result.creator.followers} Followers. Type: {getattr(result.aiEnrichment, 'creatorType', 'UNKNOWN')}, Niche: {safe_category}")
+            
+            import httpx
+            import os
+            
+            java_backend_url = os.environ.get("JAVA_BACKEND_URL", "http://localhost:8080/api/v1/creators/ingest")
+            
+            # Tính toán chỉ số trung bình
+            num_posts = len(result.recentPosts)
+            avg_views = sum((p.views or 0) for p in result.recentPosts) / num_posts if num_posts > 0 else 0.0
+            avg_likes = sum((p.likes or 0) for p in result.recentPosts) / num_posts if num_posts > 0 else 0.0
+            avg_comments = sum((p.comments or 0) for p in result.recentPosts) / num_posts if num_posts > 0 else 0.0
+            avg_shares = sum((p.shares or 0) for p in result.recentPosts) / num_posts if num_posts > 0 else 0.0
+            
+            followers = result.creator.followers
+            er = ((avg_likes + avg_comments + avg_shares) / followers * 100) if followers > 0 else 0.0
+            
+            recent_posts_list = []
+            for p in result.recentPosts:
+                recent_posts_list.append({
+                    "platformPostId": p.platformPostId,
+                    "postUrl": p.postUrl,
+                    "caption": p.caption,
+                    "views": p.views or 0,
+                    "likes": p.likes or 0,
+                    "comments": p.comments or 0,
+                    "shares": p.shares or 0,
+                    "postedAt": p.postedAt or ""
+                })
+            
+            java_payload = {
+                "platform": result.creator.platform.value,
+                "externalId": result.creator.externalId,
+                "userName": result.creator.username,
+                "displayName": result.creator.displayName,
+                "avatarUrl": result.creator.avatarUrl,
+                "creatorType": getattr(result.aiEnrichment, 'creatorType', 'UNKNOWN'),
+                "location": "Vietnam",
+                "profileUrl": result.creator.profileUrl,
+                "followers": followers,
+                "avgViews": avg_views,
+                "avgLikes": avg_likes,
+                "avgComments": avg_comments,
+                "avgShares": avg_shares,
+                "engagementRate": er,
+                "niche": result.aiEnrichment.niche if result.aiEnrichment else "General",
+                "contentSummary": result.creator.bio or "Creator",
+                "contact": getattr(result.creator, 'publicEmail', None) or "",
+                "category": result.aiEnrichment.category if result.aiEnrichment else "Lifestyle",
+                "freshnessStatus": "FRESH",
+                "dataConfidence": 0.95,
+                "recentPosts": recent_posts_list
+            }
+            
+            try:
+                print(f"[WORKER] Sending flattened JSON to Java: {java_backend_url}")
+                response = httpx.post(
+                    java_backend_url, 
+                    json=java_payload,
+                    timeout=15.0
+                )
+                if response.status_code not in [200, 201]:
+                    print(f"[WORKER] Failed to POST to backend. Status: {response.status_code}, Msg: {response.text}")
+                else:
+                    print(f"[WORKER] Successfully sent to Java for {username}!")
+            except Exception as post_err:
+                print(f"[WORKER] Failed to connect to backend: {post_err}")
+
             return result.model_dump(mode='json')
         else:
             print(f"[WORKER] FAILED: Could not crawl {username}. Retrying...")

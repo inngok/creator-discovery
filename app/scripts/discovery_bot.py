@@ -4,16 +4,17 @@ from bs4 import BeautifulSoup
 from app.workers.tasks import process_tiktok_profile
 
 def discover_creators_by_keyword(keyword: str):
-    print(f"[DISCOVERY] Starting TikTok search for keyword: '{keyword}'...")
+    safe_kw = keyword.encode('ascii', 'ignore').decode()
+    print(f"[DISCOVERY] Starting TikTok search for keyword: '{safe_kw}'...")
     options = uc.ChromeOptions()
-    options.headless = False # Headful to bypass initial captchas if any
+    options.headless = True # Tàng hình
     
     try:
         driver = uc.Chrome(options=options)
     except:
         # Fallback for Chrome 152 if driver defaults to 153
         options2 = uc.ChromeOptions()
-        options2.headless = False
+        options2.headless = True
         driver = uc.Chrome(options=options2, version_main=152)
     
     try:
@@ -63,5 +64,8 @@ if __name__ == "__main__":
         "du lịch", "thể thao", "mẹ và bé", "giải trí"
     ]
     
-    for kw in diverse_keywords:
-        discover_creators_by_keyword(kw)
+    while True:
+        for kw in diverse_keywords:
+            discover_creators_by_keyword(kw)
+        print("[DISCOVERY] Completed 1 loop. Sleeping for 1 hour (3600s) before next run...")
+        time.sleep(3600)

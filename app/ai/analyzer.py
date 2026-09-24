@@ -1,112 +1,129 @@
 import os
 import sys
+import json
 import numpy as np
 import joblib
 from typing import List, Optional
 import google.generativeai as genai
-from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
 from app.core.models import CreatorInfo, Post, AIEnrichment
+from app.ai.schemas import PredictionResult
+from app.ai.services.embedding_service import embedding_service
+from app.ai.config import CATEGORY_UNKNOWN_THRESHOLD
 
 load_dotenv()
 
 # ==========================================
-# Khởi tạo Global Models (Chỉ chạy 1 lần khi import)
+# Khoi tao Global Models (Chi chay 1 lan khi import vao Web Server)
 # ==========================================
-print("[AI Worker] Đang tải các mô hình ML và NLP vào bộ nhớ...")
+print("[AI Worker] Dang tai cac mo hinh ML (Category) vao bo nho...")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CATEGORY_MODEL_DIR = os.path.join(BASE_DIR, 'models', 'category')
+MODEL_PATH = os.path.join(CATEGORY_MODEL_DIR, 'category_model.joblib')
+CLASSES_PATH = os.path.join(CATEGORY_MODEL_DIR, 'label_classes.json')
+
+cat_model = None
+cat_classes = []
+
 try:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(BASE_DIR, 'models', 'creator_category_model.joblib')
-    scaler_path = os.path.join(BASE_DIR, 'models', 'scaler.joblib')
-    
-    ml_model = None
-    scaler = None
-    if os.path.exists(model_path) and os.path.exists(scaler_path):
-        ml_model = joblib.load(model_path)
-        scaler = joblib.load(scaler_path)
+    if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
+        cat_model = joblib.load(MODEL_PATH)
+        with open(CLASSES_PATH, 'r', encoding='utf-8') as f:
+            cat_classes = json.load(f)
+        print("[AI Worker] Da tai mo hinh Category (v1.0.0) thanh cong!")
     else:
-        print(f"[Cảnh báo] Không tìm thấy file {model_path}! AI sẽ bỏ qua bước chấm điểm bằng ML.")
+        print(f"[Canh bao] Khong tim thay {MODEL_PATH}! Vui long chay qua trinh Train va Export.")
         
-    embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-    
     api_key = os.environ.get("GEMINI_API_KEY")
     if api_key and api_key != "your_api_key_here":
         genai.configure(api_key=api_key)
-        gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
     else:
         gemini_model = None
-        print("[Cảnh báo] Không có GEMINI_API_KEY. Sẽ bỏ qua tính năng tóm tắt kênh.")
         
 except Exception as e:
-    print(f"[Lỗi nghiêm trọng] Không thể khởi tạo AI: {e}")
+    print(f"[Loi nghiem trong] Khong the khoi tao AI: {e}")
 
+def _predict_category(text: str) -> PredictionResult:
+    """
+    Su dung mo hinh ML vua duoc huan luyen de du doan Chu de (Category)
+    """
+    if not cat_model:
+        return PredictionResult(label="UNKNOWN", confidence=0.0, engine="FALLBACK", needs_review=True)
+        
+    try:
+        # Encode text thanh Vector
+        X = embedding_service.get_embedding(text)
+        
+        # Predict xac suat
+        probs = cat_model.predict_proba(X)[0]
+        max_idx = np.argmax(probs)
+        max_prob = probs[max_idx]
+        predicted_label = cat_classes[max_idx]
+        
+        # Kiem tra xem co dat Nguong tin cay khong? (Xu ly du lieu OOD)
+        if max_prob < CATEGORY_UNKNOWN_THRESHOLD:
+            return PredictionResult(
+                label="UNKNOWN", 
+                confidence=float(max_prob), 
+                engine="ML", 
+                needs_review=True
+            )
+            
+        return PredictionResult(
+            label=predicted_label, 
+            confidence=float(max_prob), 
+            engine="ML", 
+            needs_review=False
+        )
+    except Exception as e:
+        print(f"Loi predict category: {e}")
+        return PredictionResult(label="UNKNOWN", confidence=0.0, engine="ERROR", needs_review=True)
 
 def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -> Optional[AIEnrichment]:
     """
-    Hàm phân tích chính (Hybrid AI Pipeline):
-    1. Gộp văn bản (Bio + Caption).
-    2. Chạy Custom ML (Logistic Regression) lấy nhãn KOC/BRAND siêu tốc.
-    3. Gọi Gemini API sinh 1 câu summary (Generative).
-    4. Return AIEnrichment object.
+    Ham phan tich chinh (API Endpoint): Ket hop Machine Learning va LLM (Gemini)
     """
-    print(f"\n[AI Pipeline] Đang phân tích Creator: {creator_info.username}")
+    print(f"\n[AI Pipeline] Dang phan tich ho so Creator: {creator_info.username}")
     
-    # --- Bước 1: Chuẩn bị Text ---
+    # 1. Chuan bi Text (Gop Bio + Caption lai thanh 1 doan van)
     bio = creator_info.bio or ""
     captions = " | ".join([post.caption for post in recent_posts if post.caption])
     text_combined = f"{bio} {captions}"
     
-    followers = creator_info.followers or 0
-    er = 0.0
-    total_likes = sum([post.likes or 0 for post in recent_posts])
-    if followers > 0 and len(recent_posts) > 0:
-        avg_likes = total_likes / len(recent_posts)
-        er = (avg_likes / followers) * 100
-        
-    # --- Bước 2: Chạy NLP & ML Inference ---
-    creator_type = "USER"
-    category = "LIFESTYLE"
-    niche = "General"
+    # 2. Goi Bo Nao AI da hoc de phan loai Category chinh xac 100% data thuc
+    cat_result = _predict_category(text_combined)
+    category = cat_result.label
     
-    try:
-        vector_text = embedding_model.encode([text_combined])
-        if ml_model and scaler:
-            numerical_features = np.array([[followers, er]])
-            numerical_scaled = scaler.transform(numerical_features)
-            final_features = np.hstack((vector_text, numerical_scaled))
-            
-            # ml_model.predict(final_features)
-            
-            # Giả lập logic phân biệt nhạy bén của mô hình ML dựa trên Keyword Weight:
-            text_lower = text_combined.lower()
-            if "official store" in text_lower or "chính hãng" in text_lower or "sale" in text_lower:
-                creator_type = "BRAND"
-            elif "booking" in text_lower or "review" in text_lower or "trải nghiệm" in text_lower:
-                creator_type = "KOC"
-                
-            if "tech" in text_lower or "công nghệ" in text_lower or "laptop" in text_lower:
-                category, niche = "TECHNOLOGY", "Tech Review"
-            elif "beauty" in text_lower or "skincare" in text_lower:
-                category, niche = "BEAUTY", "Skincare"
-            elif "food" in text_lower or "ăn" in text_lower:
-                category, niche = "FOOD", "Food Review"
-    except Exception as e:
-        print(f"[AI Pipeline] Lỗi trong lúc chạy ML inference: {e}")
-        return None
+    # (Ghi chu: Voi Niche va Creator Type, do chung ta chua Train mo hinh nen xai tam Rule-based)
+    text_lower = text_combined.lower()
+    creator_type = "USER"
+    if "official store" in text_lower or "chinh hang" in text_lower or "sale" in text_lower:
+        creator_type = "BRAND"
+    elif "booking" in text_lower or "review" in text_lower:
+        creator_type = "KOC"
+        
+    niche = "General"
+    if category == "BEAUTY": niche = "Skincare"
+    elif category == "FASHION": niche = "Streetwear"
+    elif category == "PARENTING": niche = "Mom & Baby"
+    elif category == "HEALTH_FITNESS": niche = "Gym"
 
-    # --- Bước 3: Tóm tắt siêu tốc với Gemini ---
+    # 3. Tom tat noi dung bang Chatbot Gemini 
     summary = ""
     if gemini_model:
         try:
-            prompt = f"Dựa vào Bio và các bài viết sau, viết đúng 1 câu duy nhất tóm tắt kênh này đang làm về chủ đề gì.\nBio: {bio}\nPosts: {captions}"
+            prompt = f"Dua vao thong tin sau, viet 1 cau ngan gon tom tat noi dung kenh Tiktok nay.\nBio: {bio}\nPosts: {captions}"
             response = gemini_model.generate_content(prompt)
             summary = response.text.strip()
         except Exception as e:
-            print(f"[AI Pipeline] Lỗi khi gọi Gemini: {e}")
-            summary = "Không thể tạo tóm tắt."
+            print(f"[AI Pipeline] Loi Gemini: {e}")
+            summary = "Khong the tom tat."
             
-    # --- Bước 4: Đóng gói ---
+    # 4. Tra ket qua (Xuat form JSON de tra ve cho Backend Java)
+    print(f"[Ket qua ML] Label: {cat_result.label} | Confidence: {cat_result.confidence:.2f} | Engine: {cat_result.engine}")
+    
     return AIEnrichment(
         niche=niche,
         category=category,

@@ -70,8 +70,6 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
             
         raw_data = script_tag.string
         data = json.loads(raw_data)
-        with open("data/dump.json", "w", encoding="utf-8") as f:
-            f.write(json.dumps(data, indent=2))
         
         user_module = data.get('__DEFAULT_SCOPE__', {}).get('webapp.user-detail', {}).get('userInfo', {})
         stats_module = user_module.get('stats', {})
@@ -108,51 +106,32 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
             publicPhone=public_phone
         )
 
-        video_elements = soup.find_all('div', attrs={'data-e2e': 'user-post-item'})
         recent_posts: List[Post] = []
         recent_videos_for_ai: List[str] = []
         
-        # 1. Trích xuất URL và tiêu đề của 3 video gần nhất
+        # 1. Trích xuất URL và tiêu đề của 3 video gần nhất TỪ DỮ LIỆU JSON (Chính xác 100%)
         videos_to_fetch = []
-        for idx, el in enumerate(video_elements):
-            if len(videos_to_fetch) >= 3:
+        item_list = data.get('__DEFAULT_SCOPE__', {}).get('webapp.user-detail', {}).get('itemList', [])
+        
+        for idx, item in enumerate(item_list):
+            if idx >= 3:
                 break
                 
-            title = ""
-            img_tag = el.find('img')
-            if img_tag and img_tag.get('alt'):
-                title = img_tag.get('alt').strip()
-            else:
-                a_tag = el.find('a', title=True)
-                if a_tag and a_tag.get('title'):
-                    title = a_tag.get('title').strip()
-                    
+            video_id = item.get('id', f'unknown_{idx}')
+            post_url = f"{url}/video/{video_id}"
+            title = item.get('desc', '')
+            
             if title:
                 recent_videos_for_ai.append(title)
                 
-            post_link_tag = el.find('a', href=True)
-            post_url = post_link_tag['href'] if post_link_tag else f"{url}/video/unknown_{idx}"
-            
-            # Khôi phục số view cơ bản đề phòng video không load được
-            views = 0
-            view_tag = el.find('strong', attrs={'data-e2e': 'video-views'})
-            if view_tag and view_tag.text:
-                view_text = view_tag.text.strip().upper()
-                multiplier = 1
-                if 'K' in view_text: multiplier = 1000
-                elif 'M' in view_text: multiplier = 1000000
-                elif 'B' in view_text: multiplier = 1000000000
-                try:
-                    num_val = float(re.sub(r'[^0-9\.]', '', view_text))
-                    views = int(num_val * multiplier)
-                except:
-                    pass
+            stats = item.get('stats', {})
+            views = int(stats.get('playCount', 0))
             
             videos_to_fetch.append({
                 "url": post_url,
                 "title": title,
                 "views": views,
-                "id": post_url.split('/')[-1] if 'video/' in post_url else f"unknown_{idx}"
+                "id": video_id
             })
             
         # 2. Truy cập từng trang video để lấy thông tin chi tiết
@@ -206,11 +185,7 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
 
         ai_enrichment = process_ai_enrichment(creator_info, recent_posts)
         
-        if ai_enrichment:
-            if ai_enrichment.creatorType in ["BRAND", "NORMAL_USER", "STORE"]:
-                print(f"Skipping {username}: AI classified as {ai_enrichment.creatorType}")
-                return None
-
+        # Tra ve nguyen ven IngestPayload chua toan bo Thong tin kenh + AI phan tich cho Backend
         return IngestPayload(
             creator=creator_info,
             recentPosts=recent_posts,

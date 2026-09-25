@@ -12,3 +12,5 @@ class PredictionResult(BaseModel):
     confidence: float
     engine: str
     needs_review: bool
+    suggested_topic: str = None
+    semantic_tags: list[str] = None

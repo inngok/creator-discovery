@@ -9,7 +9,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from app.core.models import IngestPayload, CreatorInfo, Post, AIEnrichment, Platform
-from app.ai.analyzer import categorize_creator
+from app.ai.analyzer import process_ai_enrichment
 
 def get_uc_options():
     options = uc.ChromeOptions()
@@ -177,21 +177,7 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
             with open("data/rapidapi_error.log", "w") as f:
                 f.write(str(e))
 
-        ai_categories = categorize_creator(signature, recent_videos_for_ai)
-        ai_enrichment = None
-        if ai_categories:
-            creator_type = ai_categories[0].strip().upper()
-            
-            if creator_type in ["BRAND", "NORMAL_USER", "STORE"]:
-                print(f"Skipping {username}: AI classified as {creator_type}")
-                return None
-                
-            ai_enrichment = AIEnrichment(
-                tags=ai_categories[1:],
-                creatorType=creator_type,
-                niche=ai_categories[1] if len(ai_categories) > 1 else None,
-                category=ai_categories[2] if len(ai_categories) > 2 else None,
-            )
+        ai_enrichment = process_ai_enrichment(creator_info, recent_posts)
 
         return IngestPayload(
             creator=creator_info,
@@ -206,13 +192,14 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
     finally:
         if driver:
             try:
-                import os
-                if hasattr(driver, 'browser_pid'):
-                    os.system(f"taskkill /F /PID {driver.browser_pid} /T >nul 2>&1")
+                driver.quit() # Cho phep ChromeDriver tu dong xoa thu muc Temp truoc
             except:
                 pass
             try:
-                driver.quit()
+                import os
+                if hasattr(driver, 'browser_pid'):
+                    # Phat sung an hue: Tieu diet not cac tien trinh ngoan co con sot lai
+                    os.system(f"taskkill /F /PID {driver.browser_pid} /T >nul 2>&1")
             except:
                 pass
 

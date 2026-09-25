@@ -7,9 +7,9 @@ print("Dang khoi dong he thong chay ngam...")
 subprocess.run(["docker", "start", "influencermatch_redis"], capture_output=True)
 
 commands = [
-    ["venv\\Scripts\\uvicorn.exe", "main:app", "--port", "8000"],
-    ["venv\\Scripts\\celery.exe", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--pool=threads"],
-    ["venv\\Scripts\\python.exe", "-m", "app.scripts.discovery_bot"]
+    ["app\\ai_development\\.venv\\Scripts\\uvicorn.exe", "main:app", "--port", "8001"],
+    ["app\\ai_development\\.venv\\Scripts\\celery.exe", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--pool=threads"],
+    ["app\\ai_development\\.venv\\Scripts\\python.exe", "-m", "app.scripts.discovery_bot"]
 ]
 
 pids = []

@@ -191,6 +191,7 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
         return None
     finally:
         if driver:
+            user_data_dir = getattr(driver, 'user_data_dir', None)
             try:
                 driver.quit() # Cho phep ChromeDriver tu dong xoa thu muc Temp truoc
             except:
@@ -202,6 +203,14 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
                     os.system(f"taskkill /F /PID {driver.browser_pid} /T >nul 2>&1")
             except:
                 pass
+            
+            # Xoa buoc (Force delete) thu muc Temp neu uc.Chrome quen hoac bi taskkill cat ngang
+            if user_data_dir and os.path.exists(user_data_dir):
+                import shutil
+                try:
+                    shutil.rmtree(user_data_dir, ignore_errors=True)
+                except:
+                    pass
 
 async def crawl_tiktok_profile(username: str) -> Optional[IngestPayload]:
     return await asyncio.to_thread(_crawl_tiktok_profile_sync, username)

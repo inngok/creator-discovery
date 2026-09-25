@@ -80,7 +80,7 @@ try:
     api_key = os.environ.get("GEMINI_API_KEY")
     if api_key and api_key != "your_api_key_here":
         genai.configure(api_key=api_key)
-        gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+        gemini_model = genai.GenerativeModel('gemini-3.8-flash')
     else:
         gemini_model = None
         
@@ -329,8 +329,11 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
         except Exception as e:
             print(f"[Canh bao] Khong the goi Gemini: {e}")
             
-    print(f"[Ket qua ML] Label: {cat_result.label} | Confidence: {cat_result.confidence:.2f} | Engine: {cat_result.engine}")
-    print(f" -> Niche: {niche} | Type: {creator_type} | Tags: {tags}")
+    try:
+        print(f"[Ket qua ML] Label: {cat_result.label} | Confidence: {cat_result.confidence:.2f} | Engine: {cat_result.engine}")
+        print(f" -> Niche: {niche} | Type: {creator_type}")
+    except Exception:
+        pass # Bo qua loi in ky tu tieng Viet tren terminal Windows
     
     return AIEnrichment(
         niche=niche,

@@ -9,7 +9,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from app.core.models import IngestPayload, CreatorInfo, Post, AIEnrichment, Platform
-from app.ai.analyzer import process_ai_enrichment
+from app.ai.analyzer import categorize_creator
 
 def get_uc_options():
     options = uc.ChromeOptions()
@@ -47,6 +47,29 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
                 raise e
                 
         driver.set_page_load_timeout(30)
+        # Khởi tạo cookie nếu có
+        try:
+            import os
+            cookie_path = os.path.join("data", "tiktok_cookies.json")
+            if os.path.exists(cookie_path):
+                # Phải truy cập domain trước khi set cookie
+                driver.get("https://www.tiktok.com")
+                time.sleep(2)
+                with open(cookie_path, 'r', encoding='utf-8') as f:
+                    cookies = json.load(f)
+                    for cookie in cookies:
+                        # Chuẩn hóa cookie cho selenium
+                        if 'sameSite' in cookie:
+                            if cookie['sameSite'] not in ["Strict", "Lax", "None"]:
+                                del cookie['sameSite']
+                        try:
+                            driver.add_cookie(cookie)
+                        except Exception as e:
+                            pass
+                print(f"Loaded cookies from {cookie_path}")
+        except Exception as e:
+            print(f"Error loading cookies: {e}")
+
         driver.get(url)
         
         try:
@@ -70,6 +93,8 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
             
         raw_data = script_tag.string
         data = json.loads(raw_data)
+        with open("data/dump.json", "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2))
         
         user_module = data.get('__DEFAULT_SCOPE__', {}).get('webapp.user-detail', {}).get('userInfo', {})
         stats_module = user_module.get('stats', {})
@@ -109,83 +134,65 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
         recent_posts: List[Post] = []
         recent_videos_for_ai: List[str] = []
         
-        # 1. Trích xuất URL và tiêu đề của 3 video gần nhất TỪ DỮ LIỆU JSON (Chính xác 100%)
-        videos_to_fetch = []
-        item_list = data.get('__DEFAULT_SCOPE__', {}).get('webapp.user-detail', {}).get('itemList', [])
-        
-        for idx, item in enumerate(item_list):
-            if idx >= 3:
-                break
-                
-            video_id = item.get('id', f'unknown_{idx}')
-            post_url = f"{url}/video/{video_id}"
-            title = item.get('desc', '')
-            
-            if title:
-                recent_videos_for_ai.append(title)
-                
-            stats = item.get('stats', {})
-            views = int(stats.get('playCount', 0))
-            
-            videos_to_fetch.append({
-                "url": post_url,
-                "title": title,
-                "views": views,
-                "id": video_id
-            })
-            
-        # 2. Truy cập từng trang video để lấy thông tin chi tiết
-        from datetime import datetime, timezone
-        for video in videos_to_fetch:
-            posted_at = None
-            likes = 0
-            comments = 0
-            shares = 0
-            views = video["views"] # Mặc định dùng views ước lượng từ ngoài profile
-            
-            try:
-                if "unknown" not in video["id"]:
-                    driver.get(video["url"])
-                    time.sleep(2) # Chờ video page tải HTML ban đầu
-                    
-                    video_soup = BeautifulSoup(driver.page_source, 'html.parser')
-                    script_tag_vid = video_soup.find('script', id='__UNIVERSAL_DATA_FOR_REHYDRATION__')
-                    
-                    if script_tag_vid:
-                        vid_data = json.loads(script_tag_vid.string)
-                        item_module = vid_data.get('__DEFAULT_SCOPE__', {}).get('webapp.video-detail', {}).get('itemInfo', {}).get('itemStruct', {})
+        # 1. Trích xuất URL và tiêu đề của 3 video gần nhất bằng RapidAPI
+        try:
+            import requests
+            from datetime import datetime, timezone
+            rapid_url = "https://tiktok-scraper7.p.rapidapi.com/user/posts"
+            querystring = {"cursor":"0","user_id":external_id,"count":"3","sort_type":"0"}
+            headers = {
+                "x-rapidapi-key": "63ac913842msh6108843634a03a4p19f7c1jsn705e8f628b13",
+                "x-rapidapi-host": "tiktok-scraper7.p.rapidapi.com"
+            }
+            response = requests.get(rapid_url, headers=headers, params=querystring)
+            if response.status_code == 200:
+                data = response.json()
+                videos = data.get("data", {}).get("videos", [])
+                for v in videos[:3]:
+                    title = v.get("title", "")
+                    if title:
+                        recent_videos_for_ai.append(title)
                         
-                        if item_module:
-                            create_time = item_module.get('createTime')
-                            if create_time:
-                                dt = datetime.fromtimestamp(int(create_time), tz=timezone.utc)
-                                posted_at = dt.isoformat()
-                                
-                            stats = item_module.get('stats', {})
-                            likes = int(stats.get('diggCount', 0))
-                            comments = int(stats.get('commentCount', 0))
-                            shares = int(stats.get('shareCount', 0))
-                            
-                            # Số view chính xác từ API JSON
-                            if stats.get('playCount'):
-                                views = int(stats.get('playCount', 0))
-            except Exception as e:
-                print(f"Error fetching detailed video metrics for {video['url']}: {e}")
-                
-            recent_posts.append(Post(
-                platformPostId=video["id"],
-                postUrl=video["url"],
-                caption=video["title"],
-                views=views,
-                likes=likes,
-                comments=comments,
-                shares=shares,
-                postedAt=posted_at
-            ))
+                    create_time = v.get("create_time")
+                    posted_at = None
+                    if create_time:
+                        dt = datetime.fromtimestamp(int(create_time), tz=timezone.utc)
+                        posted_at = dt.isoformat()
+                        
+                    post_id = v.get("video_id", "")
+                    post_url = f"https://www.tiktok.com/@{username}/video/{post_id}"
+                    
+                    recent_posts.append(Post(
+                        platformPostId=post_id,
+                        postUrl=post_url,
+                        caption=title,
+                        views=int(v.get("play_count", 0)),
+                        likes=int(v.get("digg_count", 0)),
+                        comments=int(v.get("comment_count", 0)),
+                        shares=int(v.get("share_count", 0)),
+                        postedAt=posted_at
+                    ))
+        except Exception as e:
+            print(f"Error fetching videos from RapidAPI: {e}")
+            with open("data/rapidapi_error.log", "w") as f:
+                f.write(str(e))
 
-        ai_enrichment = process_ai_enrichment(creator_info, recent_posts)
-        
-        # Tra ve nguyen ven IngestPayload chua toan bo Thong tin kenh + AI phan tich cho Backend
+        ai_categories = categorize_creator(signature, recent_videos_for_ai)
+        ai_enrichment = None
+        if ai_categories:
+            creator_type = ai_categories[0].strip().upper()
+            
+            if creator_type in ["BRAND", "NORMAL_USER", "STORE"]:
+                print(f"Skipping {username}: AI classified as {creator_type}")
+                return None
+                
+            ai_enrichment = AIEnrichment(
+                tags=ai_categories[1:],
+                creatorType=creator_type,
+                niche=ai_categories[1] if len(ai_categories) > 1 else None,
+                category=ai_categories[2] if len(ai_categories) > 2 else None,
+            )
+
         return IngestPayload(
             creator=creator_info,
             recentPosts=recent_posts,
@@ -198,7 +205,16 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
         return None
     finally:
         if driver:
-            driver.quit()
+            try:
+                import os
+                if hasattr(driver, 'browser_pid'):
+                    os.system(f"taskkill /F /PID {driver.browser_pid} /T >nul 2>&1")
+            except:
+                pass
+            try:
+                driver.quit()
+            except:
+                pass
 
 async def crawl_tiktok_profile(username: str) -> Optional[IngestPayload]:
     return await asyncio.to_thread(_crawl_tiktok_profile_sync, username)

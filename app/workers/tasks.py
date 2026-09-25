@@ -21,12 +21,15 @@ def process_tiktok_profile(self, username: str):
             
             java_backend_url = os.environ.get("JAVA_BACKEND_URL", "http://localhost:8080/api/v1/creators/ingest")
             
-            # Tính toán chỉ số trung bình
-            num_posts = len(result.recentPosts)
-            avg_views = sum((p.views or 0) for p in result.recentPosts) / num_posts if num_posts > 0 else 0.0
-            avg_likes = sum((p.likes or 0) for p in result.recentPosts) / num_posts if num_posts > 0 else 0.0
-            avg_comments = sum((p.comments or 0) for p in result.recentPosts) / num_posts if num_posts > 0 else 0.0
-            avg_shares = sum((p.shares or 0) for p in result.recentPosts) / num_posts if num_posts > 0 else 0.0
+            # Tính toán chỉ số trung bình (Bỏ qua null theo Section 13)
+            def calc_avg(posts, attr):
+                valid_vals = [getattr(p, attr) for p in posts if getattr(p, attr) is not None]
+                return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+
+            avg_views = calc_avg(result.recentPosts, 'views')
+            avg_likes = calc_avg(result.recentPosts, 'likes')
+            avg_comments = calc_avg(result.recentPosts, 'comments')
+            avg_shares = calc_avg(result.recentPosts, 'shares')
             
             followers = result.creator.followers
             er = ((avg_likes + avg_comments + avg_shares) / followers * 100) if followers > 0 else 0.0

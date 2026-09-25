@@ -140,7 +140,16 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
         return None
     finally:
         if driver:
-            driver.quit()
+            try:
+                import os
+                if hasattr(driver, 'browser_pid'):
+                    os.system(f"taskkill /F /PID {driver.browser_pid} /T >nul 2>&1")
+            except:
+                pass
+            try:
+                driver.quit()
+            except:
+                pass
 
 async def crawl_facebook_profile(username: str) -> Optional[IngestPayload]:
     return await asyncio.to_thread(_crawl_facebook_profile_sync, username)

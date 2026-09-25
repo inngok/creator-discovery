@@ -7,6 +7,7 @@ class Platform(str, Enum):
     TIKTOK = "TIKTOK"
     YOUTUBE = "YOUTUBE"
     INSTAGRAM = "INSTAGRAM"
+    FACEBOOK = "FACEBOOK"
 
 class CreatorInfo(BaseModel):
     platform: Platform

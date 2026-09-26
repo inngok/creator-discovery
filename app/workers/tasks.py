@@ -1,6 +1,7 @@
 import json
 from .celery_app import app
 from app.crawlers.tiktok_crawler import _crawl_tiktok_profile_sync
+from app.ai.analyzer import process_ai_enrichment
 
 @app.task(bind=True, max_retries=3)
 def process_tiktok_profile(self, username: str):
@@ -10,6 +11,9 @@ def process_tiktok_profile(self, username: str):
         result = _crawl_tiktok_profile_sync(username)
         
         if result:
+            # Chạy AI ở background worker thay vì Uvicorn
+            result.aiEnrichment = process_ai_enrichment(result.creator, result.recentPosts)
+            
             with open("data/crawled_results.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps(result.model_dump(mode='json'), ensure_ascii=False) + "\n")
                 

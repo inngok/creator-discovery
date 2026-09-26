@@ -16,16 +16,8 @@ class EmbeddingService:
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super(EmbeddingService, cls).__new__(cls)
-                cls._instance._initialize_model()
+                cls._instance._model = None
         return cls._instance
-
-    def _initialize_model(self):
-        """
-        Khoi tao mo hinh NLP. Chay duy nhat 1 lan khi class duoc goi.
-        """
-        print("[EmbeddingService] Dang tai mo hinh paraphrase-multilingual-MiniLM-L12-v2 vao RAM...")
-        self._model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-        print("[EmbeddingService] Da tai xong mo hinh!")
 
     def get_embedding(self, text: Union[str, List[str]]) -> np.ndarray:
         """
@@ -33,7 +25,11 @@ class EmbeddingService:
         Dung chung cho viec nhan dien Category, Niche va Tim kiem Ngu nghia.
         """
         if self._model is None:
-            raise RuntimeError("Mo hinh chua duoc tai len bo nho.")
+            with self._lock:
+                if self._model is None:
+                    print("[EmbeddingService] Dang tai mo hinh paraphrase-multilingual-MiniLM-L12-v2 vao RAM...")
+                    self._model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+                    print("[EmbeddingService] Da tai xong mo hinh!")
             
         if isinstance(text, str):
             text = [text]

@@ -141,12 +141,6 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
     finally:
         if driver:
             try:
-                import os
-                if hasattr(driver, 'browser_pid'):
-                    os.system(f"taskkill /F /PID {driver.browser_pid} /T >nul 2>&1")
-            except:
-                pass
-            try:
                 driver.quit()
             except:
                 pass

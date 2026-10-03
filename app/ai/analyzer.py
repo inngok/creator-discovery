@@ -320,52 +320,117 @@ def _extract_tags(text: str) -> List[str]:
     top_tags = [cand for sim, cand in scored_candidates[:5]]
     return top_tags
 
+from app.ai.training_db import save_training_data
+
 def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -> Optional[AIEnrichment]:
     """
-    Ham phan tich (API Endpoint): Zero-API Local Pipeline (Khong call LLM)
+    Phan tich AI voi co che Teacher-Student (Gemini day Local ML)
     """
     print(f"\n[AI Pipeline] Dang phan tich ho so Creator: {creator_info.username}")
     
     # 1. Chuan bi Text (Gop Bio + Caption lai thanh 1 doan van)
     bio = creator_info.bio or ""
     captions = " | ".join([post.caption for post in recent_posts if post.caption])
-    text_combined = f"{bio} {captions}"
+    text_combined = f"{bio} {captions}".strip()
     
-    # 2. Goi Open-Set Ensemble de phan loai Category
+    # 2. Local ML du doan truoc
     cat_result = _predict_category(text_combined)
     category = cat_result.label
-    
-    # 3. Goi Local Semantic Niche Classification
     niche = _predict_niche(category, text_combined)
-    
-    # 4. Goi Local ML CreatorType Pipeline
     creator_type_ml = _predict_creator_type(creator_info, recent_posts, text_combined)
     creator_type = creator_type_ml if creator_type_ml else "USER"
-    
-    # 5. Extract Tags (Candidate Extraction + Embedding Reranking)
     tags = _extract_tags(text_combined)
     
-    # 6. Content Summary
+    # Khoi tao bien mac dinh
     tag_str = ", ".join(tags) if tags else "nhiều chủ đề đa dạng"
     summary = f"Creator tập trung vào ngách {niche.upper()}, thường xuyên đăng nội dung liên quan tới: {tag_str}."
+    suggested_topic = None
+    semantic_tags = []
     
-    # Neu co Gemini thi su dung de sinh summary hay hon
-    if gemini_model:
+    # 3. Gemini Fallback & Auto-Labeling (JSON Prompt)
+    should_call_gemini = False
+    needs_fallback = False
+    
+    followers = getattr(creator_info, 'followers', 0)
+    
+    # Quy tac xac dinh co goi Gemini khong (Tiet kiem API)
+    if category == "UNKNOWN" or niche == "UNKNOWN":
+        should_call_gemini = True
+        needs_fallback = True
+    elif creator_type in ["KOL", "KOC", "BRAND"]:
+        should_call_gemini = True
+    elif creator_type == "USER" and followers >= 15000:
+        should_call_gemini = True
+        needs_fallback = True  # Nho Gemini kiem tra lai xem co phai KOL/KOC bi ML doan nham khong
+        
+    if gemini_model and text_combined and should_call_gemini:
         try:
-            prompt = (f"Hãy viết một đoạn tóm tắt ngắn gọn (1-2 câu) về nội dung của kênh "
-                      f"mạng xã hội này dựa trên bio: '{bio}' và các caption: '{captions}'. "
-                      f"Tập trung vào giá trị kênh mang lại.")
+            prompt = f"""
+            Dựa trên Bio: '{bio}' và các Caption: '{captions}', và đang sở hữu {creator_info.followers} followers. 
+            Hãy phân tích và trả về ĐÚNG định dạng JSON sau (không kèm markdown ```json hay text khác):
+            {{
+                "summary": "Tóm tắt 1-2 câu về nội dung và giá trị kênh mang lại",
+                "tags": ["3-5 từ khóa xu hướng, liền mạch (ví dụ: ẩm thực đồng quê, review xe)"],
+                "semanticTags": ["3-5 thẻ ngữ nghĩa sâu xa hơn (ví dụ: gia đình, chữa lành, công nghệ cốt lõi)"],
+                "topic": "Một chủ đề gợi ý (ví dụ: Ẩm thực nông thôn)"
+            """
+            if needs_fallback:
+                prompt += """,
+                "categoryFallback": "Một trong 10 Category (BEAUTY, TECH, FOOD, FASHION, LIFESTYLE, AUTOMOTIVE, ENTERTAINMENT, EDUCATION, SPORTS, GAMING)",
+                "nicheFallback": "Một ngách phù hợp bằng tiếng Anh viết hoa (ví dụ: VLOG, COMEDY, SKINCARE, v.v...)",
+                "creatorTypeFallback": "Chọn 1 trong 4 loại: KOL (người nổi tiếng, follower cực cao >500k), KOC (chuyên review/bán hàng, follower vừa), BRAND (công ty), USER (người bình thường đăng cho vui, không review)"
+                """
+            prompt += "\n}"
+            
             response = gemini_model.generate_content(prompt)
             if response and response.text:
-                summary = response.text.strip()
+                clean_text = response.text.strip()
+                if clean_text.startswith("```json"): clean_text = clean_text[7:]
+                elif clean_text.startswith("```"): clean_text = clean_text[3:]
+                if clean_text.endswith("```"): clean_text = clean_text[:-3]
+                
+                ai_data = json.loads(clean_text.strip())
+                
+                summary = ai_data.get("summary", summary)
+                if ai_data.get("tags"): tags = ai_data["tags"]
+                if ai_data.get("semanticTags"): semantic_tags = ai_data["semanticTags"]
+                suggested_topic = ai_data.get("topic", None)
+                
+                # Update category & niche neu can va LUU vao DB
+                if needs_fallback:
+                    fb_cat = ai_data.get("categoryFallback")
+                    fb_niche = ai_data.get("nicheFallback")
+                    fb_ctype = ai_data.get("creatorTypeFallback")
+                    
+                    if fb_cat and fb_cat in CATEGORY_PROTOTYPES:
+                        category = fb_cat
+                        if fb_niche:
+                            niche = fb_niche
+                    
+                    if fb_ctype in ["KOL", "KOC", "BRAND", "USER"]:
+                        creator_type = fb_ctype
+                        
+                    # LUƯ DATABASE DE TRAIN LOCAL ML SAU NAY
+                    save_training_data(
+                        username=creator_info.username,
+                        platform=creator_info.platform,
+                        combined_text=text_combined,
+                        category=category,
+                        niche=niche,
+                        creator_type=creator_type,
+                        followers=creator_info.followers,
+                        source="GEMINI_AUTO_LABEL"
+                    )
+                    print(f"[*] Đã lưu nhãn tự động từ Gemini vào SQLite (Category: {category}, Niche: {niche}, Type: {creator_type})")
+                        
         except Exception as e:
-            print(f"[Canh bao] Khong the goi Gemini: {e}")
+            print(f"[Canh bao] Khong the goi Gemini hoac loi JSON: {e}")
             
     try:
         print(f"[Ket qua ML] Label: {cat_result.label} | Confidence: {cat_result.confidence:.2f} | Engine: {cat_result.engine}")
         print(f" -> Niche: {niche} | Type: {creator_type}")
     except Exception:
-        pass # Bo qua loi in ky tu tieng Viet tren terminal Windows
+        pass
     
     return AIEnrichment(
         niche=niche,
@@ -373,6 +438,6 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
         creatorType=creator_type,
         contentSummary=summary,
         tags=tags,
-        suggestedTopic=None,
-        semanticTags=[]
+        suggestedTopic=suggested_topic,
+        semanticTags=semantic_tags
     )

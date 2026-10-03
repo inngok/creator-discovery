@@ -1,0 +1,12 @@
+{
+    "version": "v1.0.0",
+    "release_date": "2026-09-24 21:10:34",
+    "metrics": {
+        "macro_f1": 0.4483511586452763,
+        "accuracy": 0.49122807017543857
+    },
+    "config": {
+        "unknown_threshold": 0.8
+    },
+    "description": "Bo nao phan loai Chu de (Category) phien ban Dau tien."
+}

@@ -7,6 +7,7 @@ class Platform(str, Enum):
     TIKTOK = "TIKTOK"
     YOUTUBE = "YOUTUBE"
     INSTAGRAM = "INSTAGRAM"
+    FACEBOOK = "FACEBOOK"
 
 class CreatorInfo(BaseModel):
     platform: Platform
@@ -38,6 +39,8 @@ class AIEnrichment(BaseModel):
     creatorType: Optional[str] = None
     contentSummary: Optional[str] = None
     tags: List[str] = Field(default_factory=list) # Raw AI tags if needed
+    suggestedTopic: Optional[str] = None
+    semanticTags: List[str] = Field(default_factory=list)
 
 class IngestPayload(BaseModel):
     creator: CreatorInfo

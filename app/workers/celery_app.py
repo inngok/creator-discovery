@@ -19,7 +19,7 @@ app.conf.update(
     result_serializer='json',
     timezone='Asia/Ho_Chi_Minh',
     enable_utc=True,
-    worker_concurrency=4,
+    worker_concurrency=1,
     task_acks_late=True,
     worker_prefetch_multiplier=1
 )

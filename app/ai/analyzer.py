@@ -16,33 +16,65 @@ load_dotenv()
 
 # Prototype semantic descriptions for each category
 CATEGORY_PROTOTYPES = {
-    "BEAUTY": "skincare makeup cosmetics hair care fragrance beauty review",
-    "TECH": "technology smartphone laptop gadget software AI electronics",
-    "FOOD": "food restaurant cooking eating culinary food review",
-    "FASHION": "clothing apparel fashion style outfit lookbook clothing brand",
-    "LIFESTYLE": "lifestyle daily life vlog personal routine",
-    "AUTOMOTIVE": "car motorbike electric vehicle automotive review",
-    "ENTERTAINMENT": "comedy funny entertainment vlog jokes prank humor",
-    "EDUCATION": "education learning school study knowledge teaching facts",
-    "SPORTS": "sports football soccer basketball fitness gym workout",
-    "GAMING": "gaming gameplay stream gamer esports video games"
+    "BEAUTY": "skincare makeup cosmetics hair care fragrance beauty review mỹ phẩm làm đẹp chăm sóc da kem chống nắng nước hoa son môi deal mĩ phẩm",
+    "TECH": "technology smartphone laptop gadget software AI electronics review công nghệ điện thoại máy tính phần mềm linh kiện đồ điện tử",
+    "FOOD": "food restaurant cooking eating culinary food review ăn uống nấu ăn quán ngon ẩm thực review đồ ăn nhà hàng",
+    "FASHION": "clothing apparel fashion style outfit lookbook clothing brand thời trang quần áo phối đồ giày dép túi xách phong cách local brand",
+    "LIFESTYLE": "lifestyle daily life vlog personal routine đời sống hàng ngày thói quen gia đình chia sẻ cuộc sống mẹ bỉm",
+    "AUTOMOTIVE": "car motorbike electric vehicle automotive review ô tô xe máy xe điện review xe độ xe bảo dưỡng",
+    "ENTERTAINMENT": "comedy funny entertainment vlog jokes prank humor hài hước giải trí vlog troll drama hát nhảy chốt đơn săn sale",
+    "EDUCATION": "education learning school study knowledge teaching facts giáo dục học tập kiến thức chia sẻ học thuật tiếng anh",
+    "SPORTS": "sports football soccer basketball fitness gym workout thể thao bóng đá gym thể hình chạy bộ rèn luyện sức khỏe",
+    "GAMING": "gaming gameplay stream gamer esports video games game trò chơi điện tử streamer liên quân tốc chiến pubg"
 }
 
 # Prototype semantic descriptions for niches
 NICHE_PROTOTYPES = {
     "BEAUTY": {
-        "SKINCARE": "skin care, sunscreen, acne, serum, moisturizer, cleanser, skin treatment",
-        "MAKEUP": "makeup cosmetics lipstick foundation mascara eyeshadow",
-        "HAIRCARE": "hair care shampoo conditioner hair styling haircut",
+        "SKINCARE": "skin care sunscreen acne serum moisturizer cleanser skin treatment chăm sóc da trị mụn dưỡng da tẩy trang sữa rửa mặt kem dưỡng",
+        "MAKEUP": "makeup cosmetics lipstick foundation mascara eyeshadow trang điểm son môi phấn nền phấn mắt phấn phủ mĩ phẩm",
+        "HAIRCARE": "hair care shampoo conditioner hair styling haircut chăm sóc tóc dầu gội dưỡng tóc làm tóc tạo kiểu",
     },
     "TECH": {
-        "SMARTPHONE": "smartphone mobile phone iphone android review",
-        "PC_LAPTOP": "pc laptop computer hardware gaming setup",
-        "SOFTWARE": "software apps tools ai programming coding",
+        "SMARTPHONE": "smartphone mobile phone iphone android review điện thoại smartphone đánh giá iphone samsung",
+        "PC_LAPTOP": "pc laptop computer hardware gaming setup máy tính laptop pc đồ họa cấu hình bàn phím chuột",
+        "SOFTWARE": "software apps tools ai programming coding phần mềm ứng dụng lập trình thủ thuật ai công nghệ",
     },
     "FOOD": {
-        "RESTAURANT_REVIEW": "restaurant food review eating out dining cafe",
-        "COOKING": "cooking recipe homemade kitchen baking culinary",
+        "RESTAURANT_REVIEW": "restaurant food review eating out dining cafe review quán ăn món ngon quán cafe ẩm thực đường phố nhà hàng",
+        "COOKING": "cooking recipe homemade kitchen baking culinary nấu ăn công thức làm bánh bếp núc mâm cơm vào bếp",
+    },
+    "FASHION": {
+        "STREETWEAR": "streetwear local brand street style hoodie sneakers áo thun phong cách đường phố",
+        "HIGH_FASHION": "high fashion luxury brands designer clothes thời trang cao cấp hàng hiệu túi xách sang trọng",
+        "ACCESSORIES": "jewelry watches bags sunglasses phụ kiện đồng hồ trang sức kính mắt",
+    },
+    "LIFESTYLE": {
+        "VLOG": "daily vlog personal life routine chia sẻ cuộc sống nhật ký hàng ngày",
+        "PARENTING": "parenting mom baby family mẹ và bé bỉm sữa chăm con gia đình",
+        "TRAVEL": "travel tourism trip check-in du lịch phượt khám phá resort",
+    },
+    "AUTOMOTIVE": {
+        "CARS": "car review auto supercar ô tô siêu xe review xe bốn bánh",
+        "MOTORBIKES": "motorbike motorcycle review xe máy mô tô phân khối lớn độ xe",
+    },
+    "ENTERTAINMENT": {
+        "COMEDY": "comedy funny jokes prank troll hài hước giải trí buồn cười",
+        "DRAMA": "drama gossip news showbiz hóng hớt tin tức xôn xao",
+        "MUSIC_DANCE": "music dance cover hát nhảy vũ đạo âm nhạc",
+    },
+    "EDUCATION": {
+        "LANGUAGE": "english learning study ielts toeic tiếng anh học ngoại ngữ ngữ pháp",
+        "ACADEMIC": "academic school university kiến thức toán lý hóa đại học",
+        "SKILLS": "soft skills career tips kỹ năng mềm định hướng nghề nghiệp phát triển bản thân",
+    },
+    "SPORTS": {
+        "FITNESS": "fitness gym workout yoga thể hình tập gym giảm cân yoga",
+        "FOOTBALL": "football soccer match bóng đá thể thao cúp ngoại hạng",
+    },
+    "GAMING": {
+        "PC_GAMING": "pc game steam lol fps game pc liên minh huyền thoại",
+        "MOBILE_GAMING": "mobile game esports liên quân tốc chiến pubg mobile",
     }
 }
 # ==========================================

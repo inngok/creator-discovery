@@ -16,33 +16,65 @@ load_dotenv()
 
 # Prototype semantic descriptions for each category
 CATEGORY_PROTOTYPES = {
-    "BEAUTY": "skincare makeup cosmetics hair care fragrance beauty review",
-    "TECH": "technology smartphone laptop gadget software AI electronics",
-    "FOOD": "food restaurant cooking eating culinary food review",
-    "FASHION": "clothing apparel fashion style outfit lookbook clothing brand",
-    "LIFESTYLE": "lifestyle daily life vlog personal routine",
-    "AUTOMOTIVE": "car motorbike electric vehicle automotive review",
-    "ENTERTAINMENT": "comedy funny entertainment vlog jokes prank humor",
-    "EDUCATION": "education learning school study knowledge teaching facts",
-    "SPORTS": "sports football soccer basketball fitness gym workout",
-    "GAMING": "gaming gameplay stream gamer esports video games"
+    "BEAUTY": "skincare makeup cosmetics hair care fragrance beauty review mỹ phẩm làm đẹp chăm sóc da kem chống nắng nước hoa son môi deal mĩ phẩm",
+    "TECH": "technology smartphone laptop gadget software AI electronics review công nghệ điện thoại máy tính phần mềm linh kiện đồ điện tử",
+    "FOOD": "food restaurant cooking eating culinary food review ăn uống nấu ăn quán ngon ẩm thực review đồ ăn nhà hàng",
+    "FASHION": "clothing apparel fashion style outfit lookbook clothing brand thời trang quần áo phối đồ giày dép túi xách phong cách local brand",
+    "LIFESTYLE": "lifestyle daily life vlog personal routine đời sống hàng ngày thói quen gia đình chia sẻ cuộc sống mẹ bỉm",
+    "AUTOMOTIVE": "car motorbike electric vehicle automotive review ô tô xe máy xe điện review xe độ xe bảo dưỡng",
+    "ENTERTAINMENT": "comedy funny entertainment vlog jokes prank humor hài hước giải trí vlog troll drama hát nhảy chốt đơn săn sale",
+    "EDUCATION": "education learning school study knowledge teaching facts giáo dục học tập kiến thức chia sẻ học thuật tiếng anh",
+    "SPORTS": "sports football soccer basketball fitness gym workout thể thao bóng đá gym thể hình chạy bộ rèn luyện sức khỏe",
+    "GAMING": "gaming gameplay stream gamer esports video games game trò chơi điện tử streamer liên quân tốc chiến pubg"
 }
 
 # Prototype semantic descriptions for niches
 NICHE_PROTOTYPES = {
     "BEAUTY": {
-        "SKINCARE": "skin care, sunscreen, acne, serum, moisturizer, cleanser, skin treatment",
-        "MAKEUP": "makeup cosmetics lipstick foundation mascara eyeshadow",
-        "HAIRCARE": "hair care shampoo conditioner hair styling haircut",
+        "SKINCARE": "skin care sunscreen acne serum moisturizer cleanser skin treatment chăm sóc da trị mụn dưỡng da tẩy trang sữa rửa mặt kem dưỡng",
+        "MAKEUP": "makeup cosmetics lipstick foundation mascara eyeshadow trang điểm son môi phấn nền phấn mắt phấn phủ mĩ phẩm",
+        "HAIRCARE": "hair care shampoo conditioner hair styling haircut chăm sóc tóc dầu gội dưỡng tóc làm tóc tạo kiểu",
     },
     "TECH": {
-        "SMARTPHONE": "smartphone mobile phone iphone android review",
-        "PC_LAPTOP": "pc laptop computer hardware gaming setup",
-        "SOFTWARE": "software apps tools ai programming coding",
+        "SMARTPHONE": "smartphone mobile phone iphone android review điện thoại smartphone đánh giá iphone samsung",
+        "PC_LAPTOP": "pc laptop computer hardware gaming setup máy tính laptop pc đồ họa cấu hình bàn phím chuột",
+        "SOFTWARE": "software apps tools ai programming coding phần mềm ứng dụng lập trình thủ thuật ai công nghệ",
     },
     "FOOD": {
-        "RESTAURANT_REVIEW": "restaurant food review eating out dining cafe",
-        "COOKING": "cooking recipe homemade kitchen baking culinary",
+        "RESTAURANT_REVIEW": "restaurant food review eating out dining cafe review quán ăn món ngon quán cafe ẩm thực đường phố nhà hàng",
+        "COOKING": "cooking recipe homemade kitchen baking culinary nấu ăn công thức làm bánh bếp núc mâm cơm vào bếp",
+    },
+    "FASHION": {
+        "STREETWEAR": "streetwear local brand street style hoodie sneakers áo thun phong cách đường phố",
+        "HIGH_FASHION": "high fashion luxury brands designer clothes thời trang cao cấp hàng hiệu túi xách sang trọng",
+        "ACCESSORIES": "jewelry watches bags sunglasses phụ kiện đồng hồ trang sức kính mắt",
+    },
+    "LIFESTYLE": {
+        "VLOG": "daily vlog personal life routine chia sẻ cuộc sống nhật ký hàng ngày",
+        "PARENTING": "parenting mom baby family mẹ và bé bỉm sữa chăm con gia đình",
+        "TRAVEL": "travel tourism trip check-in du lịch phượt khám phá resort",
+    },
+    "AUTOMOTIVE": {
+        "CARS": "car review auto supercar ô tô siêu xe review xe bốn bánh",
+        "MOTORBIKES": "motorbike motorcycle review xe máy mô tô phân khối lớn độ xe",
+    },
+    "ENTERTAINMENT": {
+        "COMEDY": "comedy funny jokes prank troll hài hước giải trí buồn cười",
+        "DRAMA": "drama gossip news showbiz hóng hớt tin tức xôn xao",
+        "MUSIC_DANCE": "music dance cover hát nhảy vũ đạo âm nhạc",
+    },
+    "EDUCATION": {
+        "LANGUAGE": "english learning study ielts toeic tiếng anh học ngoại ngữ ngữ pháp",
+        "ACADEMIC": "academic school university kiến thức toán lý hóa đại học",
+        "SKILLS": "soft skills career tips kỹ năng mềm định hướng nghề nghiệp phát triển bản thân",
+    },
+    "SPORTS": {
+        "FITNESS": "fitness gym workout yoga thể hình tập gym giảm cân yoga",
+        "FOOTBALL": "football soccer match bóng đá thể thao cúp ngoại hạng",
+    },
+    "GAMING": {
+        "PC_GAMING": "pc game steam lol fps game pc liên minh huyền thoại",
+        "MOBILE_GAMING": "mobile game esports liên quân tốc chiến pubg mobile",
     }
 }
 # ==========================================
@@ -288,52 +320,117 @@ def _extract_tags(text: str) -> List[str]:
     top_tags = [cand for sim, cand in scored_candidates[:5]]
     return top_tags
 
+from app.ai.training_db import save_training_data
+
 def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -> Optional[AIEnrichment]:
     """
-    Ham phan tich (API Endpoint): Zero-API Local Pipeline (Khong call LLM)
+    Phan tich AI voi co che Teacher-Student (Gemini day Local ML)
     """
     print(f"\n[AI Pipeline] Dang phan tich ho so Creator: {creator_info.username}")
     
     # 1. Chuan bi Text (Gop Bio + Caption lai thanh 1 doan van)
     bio = creator_info.bio or ""
     captions = " | ".join([post.caption for post in recent_posts if post.caption])
-    text_combined = f"{bio} {captions}"
+    text_combined = f"{bio} {captions}".strip()
     
-    # 2. Goi Open-Set Ensemble de phan loai Category
+    # 2. Local ML du doan truoc
     cat_result = _predict_category(text_combined)
     category = cat_result.label
-    
-    # 3. Goi Local Semantic Niche Classification
     niche = _predict_niche(category, text_combined)
-    
-    # 4. Goi Local ML CreatorType Pipeline
     creator_type_ml = _predict_creator_type(creator_info, recent_posts, text_combined)
     creator_type = creator_type_ml if creator_type_ml else "USER"
-    
-    # 5. Extract Tags (Candidate Extraction + Embedding Reranking)
     tags = _extract_tags(text_combined)
     
-    # 6. Content Summary
+    # Khoi tao bien mac dinh
     tag_str = ", ".join(tags) if tags else "nhiều chủ đề đa dạng"
     summary = f"Creator tập trung vào ngách {niche.upper()}, thường xuyên đăng nội dung liên quan tới: {tag_str}."
+    suggested_topic = None
+    semantic_tags = []
     
-    # Neu co Gemini thi su dung de sinh summary hay hon
-    if gemini_model:
+    # 3. Gemini Fallback & Auto-Labeling (JSON Prompt)
+    should_call_gemini = False
+    needs_fallback = False
+    
+    followers = getattr(creator_info, 'followers', 0)
+    
+    # Quy tac xac dinh co goi Gemini khong (Tiet kiem API)
+    if category == "UNKNOWN" or niche == "UNKNOWN":
+        should_call_gemini = True
+        needs_fallback = True
+    elif creator_type in ["KOL", "KOC", "BRAND"]:
+        should_call_gemini = True
+    elif creator_type == "USER" and followers >= 15000:
+        should_call_gemini = True
+        needs_fallback = True  # Nho Gemini kiem tra lai xem co phai KOL/KOC bi ML doan nham khong
+        
+    if gemini_model and text_combined and should_call_gemini:
         try:
-            prompt = (f"Hãy viết một đoạn tóm tắt ngắn gọn (1-2 câu) về nội dung của kênh "
-                      f"mạng xã hội này dựa trên bio: '{bio}' và các caption: '{captions}'. "
-                      f"Tập trung vào giá trị kênh mang lại.")
+            prompt = f"""
+            Dựa trên Bio: '{bio}' và các Caption: '{captions}', và đang sở hữu {creator_info.followers} followers. 
+            Hãy phân tích và trả về ĐÚNG định dạng JSON sau (không kèm markdown ```json hay text khác):
+            {{
+                "summary": "Tóm tắt 1-2 câu về nội dung và giá trị kênh mang lại",
+                "tags": ["3-5 từ khóa xu hướng, liền mạch (ví dụ: ẩm thực đồng quê, review xe)"],
+                "semanticTags": ["3-5 thẻ ngữ nghĩa sâu xa hơn (ví dụ: gia đình, chữa lành, công nghệ cốt lõi)"],
+                "topic": "Một chủ đề gợi ý (ví dụ: Ẩm thực nông thôn)"
+            """
+            if needs_fallback:
+                prompt += """,
+                "categoryFallback": "Một trong 10 Category (BEAUTY, TECH, FOOD, FASHION, LIFESTYLE, AUTOMOTIVE, ENTERTAINMENT, EDUCATION, SPORTS, GAMING)",
+                "nicheFallback": "Một ngách phù hợp bằng tiếng Anh viết hoa (ví dụ: VLOG, COMEDY, SKINCARE, v.v...)",
+                "creatorTypeFallback": "Chọn 1 trong 4 loại: KOL (người nổi tiếng, chuyên gia, nghệ sĩ, có sức ảnh hưởng, thường >100k followers), KOC (tập trung review sản phẩm, unbox, gắn link affiliate, chốt đơn, mọi mức follower), BRAND (tài khoản chính thức công ty/thương hiệu), USER (người bình thường chia sẻ đời sống cá nhân, không có yếu tố thương mại)"
+                """
+            prompt += "\n}"
+            
             response = gemini_model.generate_content(prompt)
             if response and response.text:
-                summary = response.text.strip()
+                clean_text = response.text.strip()
+                if clean_text.startswith("```json"): clean_text = clean_text[7:]
+                elif clean_text.startswith("```"): clean_text = clean_text[3:]
+                if clean_text.endswith("```"): clean_text = clean_text[:-3]
+                
+                ai_data = json.loads(clean_text.strip())
+                
+                summary = ai_data.get("summary", summary)
+                if ai_data.get("tags"): tags = ai_data["tags"]
+                if ai_data.get("semanticTags"): semantic_tags = ai_data["semanticTags"]
+                suggested_topic = ai_data.get("topic", None)
+                
+                # Update category & niche neu can va LUU vao DB
+                if needs_fallback:
+                    fb_cat = ai_data.get("categoryFallback")
+                    fb_niche = ai_data.get("nicheFallback")
+                    fb_ctype = ai_data.get("creatorTypeFallback")
+                    
+                    if fb_cat and fb_cat in CATEGORY_PROTOTYPES:
+                        category = fb_cat
+                        if fb_niche:
+                            niche = fb_niche
+                    
+                    if fb_ctype in ["KOL", "KOC", "BRAND", "USER"]:
+                        creator_type = fb_ctype
+                        
+                    # LUƯ DATABASE DE TRAIN LOCAL ML SAU NAY
+                    save_training_data(
+                        username=creator_info.username,
+                        platform=creator_info.platform,
+                        combined_text=text_combined,
+                        category=category,
+                        niche=niche,
+                        creator_type=creator_type,
+                        followers=creator_info.followers,
+                        source="GEMINI_AUTO_LABEL"
+                    )
+                    print(f"[*] Đã lưu nhãn tự động từ Gemini vào SQLite (Category: {category}, Niche: {niche}, Type: {creator_type})")
+                        
         except Exception as e:
-            print(f"[Canh bao] Khong the goi Gemini: {e}")
+            print(f"[Canh bao] Khong the goi Gemini hoac loi JSON: {e}")
             
     try:
         print(f"[Ket qua ML] Label: {cat_result.label} | Confidence: {cat_result.confidence:.2f} | Engine: {cat_result.engine}")
         print(f" -> Niche: {niche} | Type: {creator_type}")
     except Exception:
-        pass # Bo qua loi in ky tu tieng Viet tren terminal Windows
+        pass
     
     return AIEnrichment(
         niche=niche,
@@ -341,6 +438,6 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
         creatorType=creator_type,
         contentSummary=summary,
         tags=tags,
-        suggestedTopic=None,
-        semanticTags=[]
+        suggestedTopic=suggested_topic,
+        semanticTags=semantic_tags
     )

@@ -378,7 +378,7 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
                 prompt += """,
                 "categoryFallback": "Một trong 10 Category (BEAUTY, TECH, FOOD, FASHION, LIFESTYLE, AUTOMOTIVE, ENTERTAINMENT, EDUCATION, SPORTS, GAMING)",
                 "nicheFallback": "Một ngách phù hợp bằng tiếng Anh viết hoa (ví dụ: VLOG, COMEDY, SKINCARE, v.v...)",
-                "creatorTypeFallback": "Chọn 1 trong 4 loại: KOL (người nổi tiếng, follower cực cao >500k), KOC (chuyên review/bán hàng, follower vừa), BRAND (công ty), USER (người bình thường đăng cho vui, không review)"
+                "creatorTypeFallback": "Chọn 1 trong 4 loại: KOL (người nổi tiếng, chuyên gia, nghệ sĩ, có sức ảnh hưởng, thường >100k followers), KOC (tập trung review sản phẩm, unbox, gắn link affiliate, chốt đơn, mọi mức follower), BRAND (tài khoản chính thức công ty/thương hiệu), USER (người bình thường chia sẻ đời sống cá nhân, không có yếu tố thương mại)"
                 """
             prompt += "\n}"
             

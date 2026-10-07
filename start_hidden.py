@@ -13,14 +13,12 @@ commands = [
 ]
 
 pids = []
+log_file = open("server.log", "w")
 for cmd in commands:
-    p = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    p = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW, stdout=log_file, stderr=log_file)
     pids.append(str(p.pid))
 
 with open("service_pids.txt", "w") as f:
     f.write(",".join(pids))
 
 print("THANH CONG! He thong da chay ngam hoan toan.")
-print("Khong co cua so nao bi pop-up lam phien ban nua.")
-print("-------------------------------------------------")
-print("De TAT he thong nay, hay chay file: stop_all.bat")

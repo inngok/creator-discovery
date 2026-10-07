@@ -66,10 +66,6 @@ try:
         print(f"[Canh bao] Khong tim thay {CT_MODEL_PATH}! Vui long chay qua trinh Train va Export.")
         
     api_key = os.environ.get("GEMINI_API_KEY")
-    if api_key and api_key != "your_api_key_here":
-        gemini_model = True # Đánh dấu là có key để chạy
-    else:
-        gemini_model = None
         
 except Exception as e:
     print(f"[Loi nghiem trong] Khong the khoi tao AI: {e}")
@@ -205,9 +201,18 @@ def _predict_creator_type(creator_info: CreatorInfo, recent_posts: List[Post], t
         
     # 2. CreatorType ML Classifier
     if ct_model:
-        X_feats = extract_creator_features(creator_info, recent_posts, text_combined)
-        predicted_label = ct_model.predict(X_feats.reshape(1, -1))[0]
-        return str(predicted_label)
+        try:
+            X_feats = extract_creator_features(creator_info, recent_posts, text_combined)
+            
+            # Tự động cắt bớt feature nếu Model cũ chỉ train trên 384 (Text) thay vì 391 (Text + Hành vi)
+            expected_features = getattr(ct_model, "n_features_in_", 384)
+            X_feats_for_model = X_feats[:expected_features]
+            
+            predicted_label = ct_model.predict(X_feats_for_model.reshape(1, -1))[0]
+            return str(predicted_label)
+        except Exception as e:
+            print(f"[!] Lỗi khi chạy ML CreatorType: {e}")
+            return None
     
     return None # Return None de Fallback qua LLM (Gemini) do chua train xong Model
 
@@ -306,7 +311,7 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
         should_call_gemini = True
         needs_fallback = True  # Nho Gemini kiem tra lai xem co phai KOL/KOC bi ML doan nham khong
         
-    if gemini_model and text_combined and should_call_gemini:
+    if text_combined and should_call_gemini:
         try:
             prompt = f"""
             Dựa trên Bio: '{bio}' và các Caption: '{captions}', và đang sở hữu {creator_info.followers} followers. 
@@ -334,14 +339,29 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
             }
             
             fallback_models = []
-            if keys_status["GEMINI"]: fallback_models.append("gemini/gemini-1.5-flash") # Ưu tiên Google
-            if keys_status["GROQ"]: fallback_models.append("groq/llama-3.3-70b-versatile")       # Phao cứu sinh 1 (Siêu nhanh)
-            if keys_status["OPENAI"]: fallback_models.append("openai/gpt-4o-mini")      # Phao cứu sinh 2 (Chốt chặn)
+            if keys_status["GEMINI"]:
+                # --- PHUC HOI "BI THUAT" TU DONG QUET 33+ MODELS CUA GEMINI ---
+                try:
+                    import google.generativeai as genai
+                    genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+                    for m in genai.list_models():
+                        if 'generateContent' in m.supported_generation_methods:
+                            # Chuyen doi ten "models/gemini-pro" thanh chuan cua LiteLLM la "gemini/gemini-pro"
+                            lite_name = m.name.replace("models/", "gemini/")
+                            if lite_name not in fallback_models:
+                                fallback_models.append(lite_name)
+                    print(f"[*] Da tu dong nap {len(fallback_models)} models cua Gemini vao Phao cuu sinh!")
+                except Exception as e:
+                    print(f"[-] Quet Gemini Models that bai, dung tam Hardcode. Loi: {e}")
+                    fallback_models.extend(["gemini/gemini-1.5-flash", "gemini/gemini-1.5-pro", "gemini/gemini-pro"])
+            
+            if keys_status["GROQ"]: fallback_models.append("groq/llama-3.3-70b-versatile")
+            if keys_status["OPENAI"]: fallback_models.append("openai/gpt-4o-mini")
             
             response_text = None
             if fallback_models:
                 try:
-                    print(f"[*] Đang yêu cầu LiteLLM điều phối AI (Ưu tiên: {fallback_models[0]})...")
+                    print(f"[*] Dang yeu cau LiteLLM dieu phoi AI (Uu tien: {fallback_models[0]})...")
                     response = litellm.completion(
                         model=fallback_models[0],
                         messages=[{"role": "user", "content": prompt}],
@@ -350,9 +370,9 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
                     
                     if response and response.choices:
                         response_text = response.choices[0].message.content
-                        print(f"[+] Đã lấy được dữ liệu AI thành công (Model thực tế phục vụ: {response.model})!")
+                        print(f"[+] Da lay duoc du lieu AI thanh cong (Model thuc te phuc vu: {response.model})!")
                 except Exception as cascade_e:
-                    print(f"[-] Tất cả các phao cứu sinh AI đều thất bại: {cascade_e}")
+                    print(f"[-] Tat ca cac phao cuu sinh AI deu that bai: {cascade_e}")
             
             if response_text:
                 clean_text = response_text.strip()
@@ -396,7 +416,7 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
                         followers=creator_info.followers,
                         source="GEMINI_AUTO_LABEL"
                     )
-                    print(f"[*] Đã lưu nhãn tự động từ Gemini vào SQLite (Category: {category}, Niche: {niche}, Type: {creator_type})")
+                    print(f"[*] Da luu nhan tu dong tu Gemini vao SQLite (Category: {category}, Niche: {niche}, Type: {creator_type})")
                         
         except Exception as e:
             print(f"[Canh bao] Khong the goi Gemini hoac loi JSON: {e}")

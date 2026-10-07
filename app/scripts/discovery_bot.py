@@ -67,5 +67,9 @@ if __name__ == "__main__":
     while True:
         for kw in diverse_keywords:
             discover_creators_by_keyword(kw)
-        print("[DISCOVERY] Completed 1 loop. Sleeping for 1 hour (3600s) before next run...")
-        time.sleep(3600)
+            # Thêm thời gian nghỉ giữa các từ khóa (giãn cách ra 10 phút)
+            print(f"[DISCOVERY] Đã quét xong từ khóa '{kw}'. Tạm nghỉ 10 phút để tránh bị chặn IP...")
+            time.sleep(600)
+            
+        print("[DISCOVERY] Hoàn thành 1 vòng lớn. Sẽ ngủ 6 tiếng (21600s) trước khi chạy vòng tiếp theo...")
+        time.sleep(21600)

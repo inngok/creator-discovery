@@ -23,3 +23,12 @@ app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1
 )
+
+from celery.schedules import crontab
+
+app.conf.beat_schedule = {
+    'auto-retrain-every-sunday': {
+        'task': 'app.workers.tasks.run_retrain_pipeline',
+        'schedule': crontab(hour=2, minute=0, day_of_week='sun'), # Chạy lúc 2h sáng Chủ Nhật
+    },
+}

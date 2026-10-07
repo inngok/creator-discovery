@@ -7,6 +7,10 @@ from typing import List, Optional
 import google.generativeai as genai
 from dotenv import load_dotenv
 
+# Fix lỗi LiteLLM tải file cost trên Windows
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+import litellm
+
 from app.core.models import CreatorInfo, Post, AIEnrichment
 from app.ai.schemas import PredictionResult
 from app.ai.services.embedding_service import embedding_service
@@ -14,69 +18,21 @@ from app.ai.config import CATEGORY_UNKNOWN_THRESHOLD
 
 load_dotenv()
 
-# Prototype semantic descriptions for each category
-CATEGORY_PROTOTYPES = {
-    "BEAUTY": "skincare makeup cosmetics hair care fragrance beauty review mỹ phẩm làm đẹp chăm sóc da kem chống nắng nước hoa son môi deal mĩ phẩm",
-    "TECH": "technology smartphone laptop gadget software AI electronics review công nghệ điện thoại máy tính phần mềm linh kiện đồ điện tử",
-    "FOOD": "food restaurant cooking eating culinary food review ăn uống nấu ăn quán ngon ẩm thực review đồ ăn nhà hàng",
-    "FASHION": "clothing apparel fashion style outfit lookbook clothing brand thời trang quần áo phối đồ giày dép túi xách phong cách local brand",
-    "LIFESTYLE": "lifestyle daily life vlog personal routine đời sống hàng ngày thói quen gia đình chia sẻ cuộc sống mẹ bỉm",
-    "AUTOMOTIVE": "car motorbike electric vehicle automotive review ô tô xe máy xe điện review xe độ xe bảo dưỡng",
-    "ENTERTAINMENT": "comedy funny entertainment vlog jokes prank humor hài hước giải trí vlog troll drama hát nhảy chốt đơn săn sale",
-    "EDUCATION": "education learning school study knowledge teaching facts giáo dục học tập kiến thức chia sẻ học thuật tiếng anh",
-    "SPORTS": "sports football soccer basketball fitness gym workout thể thao bóng đá gym thể hình chạy bộ rèn luyện sức khỏe",
-    "GAMING": "gaming gameplay stream gamer esports video games game trò chơi điện tử streamer liên quân tốc chiến pubg"
-}
+# Tải Prototypes từ file JSON (thay cho Hardcode)
+import json
+import os
 
-# Prototype semantic descriptions for niches
-NICHE_PROTOTYPES = {
-    "BEAUTY": {
-        "SKINCARE": "skin care sunscreen acne serum moisturizer cleanser skin treatment chăm sóc da trị mụn dưỡng da tẩy trang sữa rửa mặt kem dưỡng",
-        "MAKEUP": "makeup cosmetics lipstick foundation mascara eyeshadow trang điểm son môi phấn nền phấn mắt phấn phủ mĩ phẩm",
-        "HAIRCARE": "hair care shampoo conditioner hair styling haircut chăm sóc tóc dầu gội dưỡng tóc làm tóc tạo kiểu",
-    },
-    "TECH": {
-        "SMARTPHONE": "smartphone mobile phone iphone android review điện thoại smartphone đánh giá iphone samsung",
-        "PC_LAPTOP": "pc laptop computer hardware gaming setup máy tính laptop pc đồ họa cấu hình bàn phím chuột",
-        "SOFTWARE": "software apps tools ai programming coding phần mềm ứng dụng lập trình thủ thuật ai công nghệ",
-    },
-    "FOOD": {
-        "RESTAURANT_REVIEW": "restaurant food review eating out dining cafe review quán ăn món ngon quán cafe ẩm thực đường phố nhà hàng",
-        "COOKING": "cooking recipe homemade kitchen baking culinary nấu ăn công thức làm bánh bếp núc mâm cơm vào bếp",
-    },
-    "FASHION": {
-        "STREETWEAR": "streetwear local brand street style hoodie sneakers áo thun phong cách đường phố",
-        "HIGH_FASHION": "high fashion luxury brands designer clothes thời trang cao cấp hàng hiệu túi xách sang trọng",
-        "ACCESSORIES": "jewelry watches bags sunglasses phụ kiện đồng hồ trang sức kính mắt",
-    },
-    "LIFESTYLE": {
-        "VLOG": "daily vlog personal life routine chia sẻ cuộc sống nhật ký hàng ngày",
-        "PARENTING": "parenting mom baby family mẹ và bé bỉm sữa chăm con gia đình",
-        "TRAVEL": "travel tourism trip check-in du lịch phượt khám phá resort",
-    },
-    "AUTOMOTIVE": {
-        "CARS": "car review auto supercar ô tô siêu xe review xe bốn bánh",
-        "MOTORBIKES": "motorbike motorcycle review xe máy mô tô phân khối lớn độ xe",
-    },
-    "ENTERTAINMENT": {
-        "COMEDY": "comedy funny jokes prank troll hài hước giải trí buồn cười",
-        "DRAMA": "drama gossip news showbiz hóng hớt tin tức xôn xao",
-        "MUSIC_DANCE": "music dance cover hát nhảy vũ đạo âm nhạc",
-    },
-    "EDUCATION": {
-        "LANGUAGE": "english learning study ielts toeic tiếng anh học ngoại ngữ ngữ pháp",
-        "ACADEMIC": "academic school university kiến thức toán lý hóa đại học",
-        "SKILLS": "soft skills career tips kỹ năng mềm định hướng nghề nghiệp phát triển bản thân",
-    },
-    "SPORTS": {
-        "FITNESS": "fitness gym workout yoga thể hình tập gym giảm cân yoga",
-        "FOOTBALL": "football soccer match bóng đá thể thao cúp ngoại hạng",
-    },
-    "GAMING": {
-        "PC_GAMING": "pc game steam lol fps game pc liên minh huyền thoại",
-        "MOBILE_GAMING": "mobile game esports liên quân tốc chiến pubg mobile",
-    }
-}
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROTOTYPES_PATH = os.path.join(BASE_DIR, 'data', 'prototypes.json')
+try:
+    with open(PROTOTYPES_PATH, 'r', encoding='utf-8') as f:
+        _protos = json.load(f)
+        CATEGORY_PROTOTYPES = _protos.get("CATEGORY_PROTOTYPES", {})
+        NICHE_PROTOTYPES = _protos.get("NICHE_PROTOTYPES", {})
+except Exception as e:
+    print(f"[!] Không tìm thấy prototypes.json: {e}")
+    CATEGORY_PROTOTYPES = {}
+    NICHE_PROTOTYPES = {}
 # ==========================================
 # Khoi tao Global Models (Chi chay 1 lan khi import vao Web Server)
 # ==========================================
@@ -111,8 +67,7 @@ try:
         
     api_key = os.environ.get("GEMINI_API_KEY")
     if api_key and api_key != "your_api_key_here":
-        genai.configure(api_key=api_key)
-        gemini_model = genai.GenerativeModel('gemini-3.8-flash')
+        gemini_model = True # Đánh dấu là có key để chạy
     else:
         gemini_model = None
         
@@ -288,37 +243,25 @@ def _predict_niche(category: str, text: str) -> str:
         return best_niche
     return "UNKNOWN"
 
+import yake
+
 def _extract_tags(text: str) -> List[str]:
-    """Candidate Extraction + Embedding Reranking"""
-    # 1. Candidate extraction (Simple words/phrases extraction)
-    words = re.findall(r'\b[a-zA-Zàáãạảăắằẳẵặâấầẩẫậèéẹẻẽêềếểễệđìíĩỉịòóõọỏôốồổỗộơớờởỡợùúũụủưứừửữựỳỵỷỹý_]+\b', text.lower())
-    stopwords = {"và", "là", "của", "cho", "để", "có", "trong", "với", "các", "những", "đây", "mình", "bạn", "người", "không", "thì", "mà", "lại", "được"}
-    words = [w for w in words if w not in stopwords and len(w) > 2]
+    """Candidate Extraction using YAKE (N-grams)"""
+    if not text or len(text.strip()) == 0:
+        return []
     
-    if not words: return []
-    
-    counter = Counter(words)
-    candidates = [word for word, count in counter.most_common(20)]
-    
-    # 2. Embedding Reranking
-    X = embedding_service.get_embedding(text)
-    x_flat = np.array(X).flatten()
-    from numpy.linalg import norm
-    x_norm = norm(x_flat)
-    if x_norm == 0: return candidates[:3]
-    
-    scored_candidates = []
-    for cand in candidates:
-        cand_emb = embedding_service.get_embedding(cand)
-        cand_flat = np.array(cand_emb).flatten()
-        c_norm = norm(cand_flat)
-        if c_norm == 0: continue
-        sim = np.dot(x_flat, cand_flat) / (x_norm * c_norm)
-        scored_candidates.append((sim, cand))
+    try:
+        # Sử dụng thuật toán YAKE để lấy cụm từ (Phrases) thay vì từng chữ rời rạc
+        kw_extractor = yake.KeywordExtractor(lan="vi", n=3, dedupLim=0.9, dedupFunc='seqm', windowsSize=1, top=5)
+        keywords = kw_extractor.extract_keywords(text)
         
-    scored_candidates.sort(reverse=True, key=lambda x: x[0])
-    top_tags = [cand for sim, cand in scored_candidates[:5]]
-    return top_tags
+        # YAKE trả về danh sách các tuple (từ_khóa, điểm_số). Điểm số càng thấp càng tốt.
+        # Rút trích chỉ lấy các từ khóa.
+        top_tags = [kw[0] for kw in keywords]
+        return top_tags
+    except Exception as e:
+        print(f"Lỗi extract_tags (YAKE): {e}")
+        return []
 
 from app.ai.training_db import save_training_data
 
@@ -372,7 +315,8 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
                 "summary": "Tóm tắt 1-2 câu về nội dung và giá trị kênh mang lại",
                 "tags": ["3-5 từ khóa xu hướng, liền mạch (ví dụ: ẩm thực đồng quê, review xe)"],
                 "semanticTags": ["3-5 thẻ ngữ nghĩa sâu xa hơn (ví dụ: gia đình, chữa lành, công nghệ cốt lõi)"],
-                "topic": "Một chủ đề gợi ý (ví dụ: Ẩm thực nông thôn)"
+                "topic": "Một chủ đề gợi ý (ví dụ: Ẩm thực nông thôn)",
+                "isSelling": false // (Trả về true nếu nội dung có mùi bán hàng, gắn link affiliate, kêu gọi chốt đơn, PR)
             """
             if needs_fallback:
                 prompt += """,
@@ -382,16 +326,47 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
                 """
             prompt += "\n}"
             
-            response = gemini_model.generate_content(prompt)
-            if response and response.text:
-                clean_text = response.text.strip()
+            # --- DYNAMIC MULTI-PROVIDER CASCADE (LITELLM) ---
+            keys_status = {
+                "GEMINI": bool(os.environ.get("GEMINI_API_KEY")),
+                "GROQ": bool(os.environ.get("GROQ_API_KEY")),
+                "OPENAI": bool(os.environ.get("OPENAI_API_KEY")),
+            }
+            
+            fallback_models = []
+            if keys_status["GEMINI"]: fallback_models.append("gemini/gemini-1.5-flash") # Ưu tiên Google
+            if keys_status["GROQ"]: fallback_models.append("groq/llama-3.3-70b-versatile")       # Phao cứu sinh 1 (Siêu nhanh)
+            if keys_status["OPENAI"]: fallback_models.append("openai/gpt-4o-mini")      # Phao cứu sinh 2 (Chốt chặn)
+            
+            response_text = None
+            if fallback_models:
+                try:
+                    print(f"[*] Đang yêu cầu LiteLLM điều phối AI (Ưu tiên: {fallback_models[0]})...")
+                    response = litellm.completion(
+                        model=fallback_models[0],
+                        messages=[{"role": "user", "content": prompt}],
+                        fallbacks=fallback_models[1:] if len(fallback_models) > 1 else [],
+                    )
+                    
+                    if response and response.choices:
+                        response_text = response.choices[0].message.content
+                        print(f"[+] Đã lấy được dữ liệu AI thành công (Model thực tế phục vụ: {response.model})!")
+                except Exception as cascade_e:
+                    print(f"[-] Tất cả các phao cứu sinh AI đều thất bại: {cascade_e}")
+            
+            if response_text:
+                clean_text = response_text.strip()
                 if clean_text.startswith("```json"): clean_text = clean_text[7:]
                 elif clean_text.startswith("```"): clean_text = clean_text[3:]
                 if clean_text.endswith("```"): clean_text = clean_text[:-3]
                 
                 ai_data = json.loads(clean_text.strip())
                 
+                is_selling = ai_data.get("isSelling", False)
                 summary = ai_data.get("summary", summary)
+                if is_selling:
+                    summary += " (Phát hiện: KOC có dấu hiệu thương mại, thường xuyên chèo kéo bán hàng hoặc review PR sản phẩm)."
+                
                 if ai_data.get("tags"): tags = ai_data["tags"]
                 if ai_data.get("semanticTags"): semantic_tags = ai_data["semanticTags"]
                 suggested_topic = ai_data.get("topic", None)

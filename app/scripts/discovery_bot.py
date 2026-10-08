@@ -1,4 +1,6 @@
 import time
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 import undetected_chromedriver as uc
 from bs4 import BeautifulSoup
 from app.workers.tasks import process_tiktok_profile
@@ -12,10 +14,10 @@ def discover_creators_by_keyword(keyword: str):
     try:
         driver = uc.Chrome(options=options)
     except:
-        # Fallback for Chrome 152 if driver defaults to 153
+        # Fallback for Chrome 154 if auto-detect fails
         options2 = uc.ChromeOptions()
         options2.headless = True
-        driver = uc.Chrome(options=options2, version_main=152)
+        driver = uc.Chrome(options=options2, version_main=154)
     
     try:
         import urllib.parse

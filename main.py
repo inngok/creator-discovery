@@ -63,6 +63,17 @@ async def enqueue_tiktok(username: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/v1/ai/retrain")
+async def trigger_ai_retrain():
+    """API để chạy Manual kịch bản Data Flywheel (Cập nhật từ khóa mới cho AI)."""
+    try:
+        from app.workers.tasks import run_retrain_pipeline
+        # Đưa vào Celery Worker chạy ngầm để không làm treo API request
+        run_retrain_pipeline.delay()
+        return {"status": "success", "message": "Đã đưa luồng Retrain AI vào hàng đợi Celery! Bạn có thể xem log của Worker."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

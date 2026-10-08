@@ -48,7 +48,7 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
         
         # Give Facebook some time to load
         time.sleep(5)
-            
+  
         for _ in range(3):
             driver.execute_script("window.scrollBy(0, 1500);")
             time.sleep(1.5)

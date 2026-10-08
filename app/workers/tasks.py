@@ -76,10 +76,10 @@ def process_tiktok_profile(self, username: str):
             }
             
             try:
-                print(f"[WORKER] Sending flattened JSON to Java: {java_backend_url}")
                 response = httpx.post(
                     java_backend_url, 
                     json=java_payload,
+                    headers={"X-Service-Key": "secret-key-123"},
                     timeout=15.0
                 )
                 if response.status_code not in [200, 201]:
@@ -96,3 +96,13 @@ def process_tiktok_profile(self, username: str):
     except Exception as e:
         print(f"[WORKER] ERROR processing {username}: {e}")
         raise self.retry(exc=e, countdown=10)
+
+@app.task(bind=True)
+def run_retrain_pipeline(self):
+    print("[WORKER] Bắt đầu chạy Vòng lặp học tập (AI Retrain Pipeline)...")
+    try:
+        from app.scripts.auto_update_prototypes import update_prototypes
+        update_prototypes()
+        print("[WORKER] Chạy thành công AI Retrain Pipeline.")
+    except Exception as e:
+        print(f"[WORKER] Lỗi khi chạy AI Retrain Pipeline: {e}")

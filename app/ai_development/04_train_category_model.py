@@ -22,7 +22,7 @@ from app.ai.services.embedding_service import embedding_service
 
 # Duong dan file
 DATA_DIR = os.path.join(BASE_DIR, "data", "final")
-TRAIN_CSV = os.path.join(DATA_DIR, "category_train_v1.csv")
+TRAIN_CSV = os.path.join(DATA_DIR, "category_training.csv")
 READINESS_JSON = os.path.join(DATA_DIR, "training_readiness.json")
 
 # Thu muc xuat file nhap (candidate)

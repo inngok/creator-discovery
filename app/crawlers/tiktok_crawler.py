@@ -25,14 +25,20 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
     recent_videos_for_ai: List[str] = []
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=['--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage'])
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
+        browser = p.chromium.launch(headless=True, args=['--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'])
+        state_path = os.path.join("data", "playwright_state.json")
+        context_args = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "viewport": {'width': 1280, 'height': 720}
+        }
+        if os.path.exists(state_path):
+            context_args["storage_state"] = state_path
+            
+        context = browser.new_context(**context_args)
         
         # Khởi tạo cookie nếu có
         cookie_path = os.path.join("data", "tiktok_cookies.json")
-        if os.path.exists(cookie_path):
+        if os.path.exists(cookie_path) and not os.path.exists(state_path):
             try:
                 with open(cookie_path, 'r', encoding='utf-8') as f:
                     cookies = json.load(f)
@@ -51,13 +57,24 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
         stealth.apply_stealth_sync(page)
 
         # Chặn bắt (Intercept) request API để lấy danh sách video nhanh gọn
+        # Dùng set để tránh trùng lặp
+        seen_post_ids = set()
+        
         def handle_response(response):
-            if '/api/post/item_list' in response.url and response.status == 200:
+            if 'api' in response.url and 'item_list' in response.url and response.status == 200:
                 try:
-                    body = response.json()
+                    text = response.text()
+                    if not text:
+                        return
+                    body = json.loads(text)
                     itemList = body.get('itemList', [])
-                    for v in itemList[:3]:
+                    for v in itemList:
+                        if len(recent_posts) >= 3:
+                            break
                         post_id = str(v.get('id', ''))
+                        if post_id in seen_post_ids:
+                            continue
+                        seen_post_ids.add(post_id)
                         title = v.get('desc', '')
                         if title:
                             recent_videos_for_ai.append(title)
@@ -93,10 +110,16 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
             except PlaywrightTimeoutError:
                 pass
                 
+            page.wait_for_timeout(3000) # Cho API kịp phản hồi
+                
             # Scroll để trigger fetch list video API
+            import random
             for _ in range(3):
-                page.evaluate("window.scrollBy(0, 1500);")
-                page.wait_for_timeout(2000)
+                if len(recent_posts) >= 3:
+                    break
+                scroll_amount = random.randint(800, 1500)
+                page.evaluate(f"window.scrollBy(0, {scroll_amount});")
+                page.wait_for_timeout(random.randint(2000, 4000))
                 
             content = page.content()
             soup = BeautifulSoup(content, 'html.parser')
@@ -150,70 +173,22 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
                 publicPhone=public_phone
             )
             
+            # Lưu lại trạng thái trình duyệt (Cookies, Token) để lần sau không bị coi là Bot mới
+            try:
+                context.storage_state(path=state_path)
+            except Exception:
+                pass
+                
         finally:
             browser.close()
-
-    # 2. Nếu không lấy được qua Playwright interception, fallback về RapidAPI với retry
-    if not recent_posts:
-        print(f"No posts in Network Interception, falling back to RapidAPI for {username}")
-        try:
-            import requests
-            from datetime import datetime, timezone
-            rapid_url = "https://tiktok-scraper7.p.rapidapi.com/user/posts"
-            querystring = {"cursor":"0","user_id":external_id,"count":"3","sort_type":"0"}
-            rapidapi_key = os.environ.get("RAPIDAPI_KEY")
-            if not rapidapi_key:
-                print("RAPIDAPI_KEY is missing from environment variables.")
-                rapidapi_key = ""
-                
-            headers = {
-                "x-rapidapi-key": rapidapi_key,
-                "x-rapidapi-host": "tiktok-scraper7.p.rapidapi.com"
-            }
             
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    response = requests.get(rapid_url, headers=headers, params=querystring, timeout=15)
-                    if response.status_code == 200:
-                        api_data = response.json()
-                        videos = api_data.get("data", {}).get("videos", [])
-                        for v in videos[:3]:
-                            title = v.get("title", "")
-                            if title:
-                                recent_videos_for_ai.append(title)
-                                
-                            create_time = v.get("create_time")
-                            posted_at = None
-                            if create_time:
-                                dt = datetime.fromtimestamp(int(create_time), tz=timezone.utc)
-                                posted_at = dt.isoformat()
-                                
-                            post_id = v.get("video_id", "")
-                            post_url = f"https://www.tiktok.com/@{username}/video/{post_id}"
-                            
-                            recent_posts.append(Post(
-                                platformPostId=post_id,
-                                postUrl=post_url,
-                                caption=title,
-                                views=int(v.get("play_count", 0)),
-                                likes=int(v.get("digg_count", 0)),
-                                comments=int(v.get("comment_count", 0)),
-                                shares=int(v.get("share_count", 0)),
-                                postedAt=posted_at
-                            ))
-                        break
-                    else:
-                        print(f"RapidAPI error {response.status_code}, retrying {attempt+1}/{max_retries}")
-                        time.sleep(2)
-                except requests.exceptions.RequestException as req_err:
-                    print(f"Network error calling RapidAPI: {req_err}")
-                    time.sleep(2)
-                    
-        except Exception as e:
-            print(f"General error fetching from RapidAPI: {e}")
-            with open("data/rapidapi_error.log", "w") as f:
-                f.write(str(e))
+        # Thêm thời gian nghỉ ngẫu nhiên từ 30 đến 60 giây giữa các lần cào để giãn cách tối đa, tránh bị Rate Limit/Block IP
+        import random
+        time.sleep(random.uniform(30.0, 60.0))
+
+    # Đã bỏ phần RapidAPI theo yêu cầu để tập trung giải quyết bằng công cụ cào (Playwright)
+    if not recent_posts:
+        print(f"No posts in Network Interception for {username}. Might be blocked or no posts exist.")
 
     if not recent_posts and creator_info.bio:
         print("No recent videos found, AI will fallback to using bio only.")

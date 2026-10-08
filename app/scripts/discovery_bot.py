@@ -1,4 +1,6 @@
 import time
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 import undetected_chromedriver as uc
 from bs4 import BeautifulSoup
 from app.workers.tasks import process_tiktok_profile
@@ -12,10 +14,10 @@ def discover_creators_by_keyword(keyword: str):
     try:
         driver = uc.Chrome(options=options)
     except:
-        # Fallback for Chrome 152 if driver defaults to 153
+        # Fallback for Chrome 154 if auto-detect fails
         options2 = uc.ChromeOptions()
         options2.headless = True
-        driver = uc.Chrome(options=options2, version_main=152)
+        driver = uc.Chrome(options=options2, version_main=154)
     
     try:
         import urllib.parse
@@ -67,5 +69,9 @@ if __name__ == "__main__":
     while True:
         for kw in diverse_keywords:
             discover_creators_by_keyword(kw)
-        print("[DISCOVERY] Completed 1 loop. Sleeping for 1 hour (3600s) before next run...")
-        time.sleep(3600)
+            # Thêm thời gian nghỉ giữa các từ khóa (giãn cách ra 10 phút)
+            print(f"[DISCOVERY] Đã quét xong từ khóa '{kw}'. Tạm nghỉ 10 phút để tránh bị chặn IP...")
+            time.sleep(600)
+            
+        print("[DISCOVERY] Hoàn thành 1 vòng lớn. Sẽ ngủ 6 tiếng (21600s) trước khi chạy vòng tiếp theo...")
+        time.sleep(21600)

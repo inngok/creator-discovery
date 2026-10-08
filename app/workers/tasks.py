@@ -76,10 +76,10 @@ def process_tiktok_profile(self, username: str):
             }
             
             try:
-                print(f"[WORKER] Sending flattened JSON to Java: {java_backend_url}")
                 response = httpx.post(
                     java_backend_url, 
                     json=java_payload,
+                    headers={"X-Service-Key": "secret-key-123"},
                     timeout=15.0
                 )
                 if response.status_code not in [200, 201]:

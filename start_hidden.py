@@ -15,7 +15,7 @@ commands = [
 pids = []
 log_file = open("server.log", "w")
 for cmd in commands:
-    p = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW, stdout=log_file, stderr=log_file)
+    p = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     pids.append(str(p.pid))
 
 with open("service_pids.txt", "w") as f:

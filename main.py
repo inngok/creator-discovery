@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from app.core.models import IngestPayload
 from app.crawlers.youtube_crawler import crawl_youtube_channel
 from app.crawlers.tiktok_crawler import crawl_tiktok_profile
+from app.crawlers.instagram_crawler import crawl_instagram_profile
 
 app = FastAPI(
     title="InfluencerMatch Crawler API",
@@ -53,6 +54,18 @@ async def crawl_tiktok(username: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to crawl TikTok: {e}")
+
+@app.get("/api/v1/crawl/instagram", response_model=IngestPayload)
+async def crawl_instagram(username: str):
+    try:
+        profile = await crawl_instagram_profile(username)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Instagram profile not found or could not extract data")
+        return profile
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to crawl Instagram: {e}")
 
 @app.post("/api/v1/crawl/tiktok/enqueue")
 async def enqueue_tiktok(username: str):

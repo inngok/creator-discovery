@@ -186,35 +186,33 @@ def extract_creator_features(creator_info: CreatorInfo, recent_posts: List[Post]
     
     return np.concatenate([X_text_array, numerical_features])
 
-def _predict_creator_type(creator_info: CreatorInfo, recent_posts: List[Post], text_combined: str) -> Optional[str]:
+def _predict_creator_type(creator_info: CreatorInfo, recent_posts: List[Post], text_combined: str) -> str:
     """
-    CreatorType Architecture:
-    1. Strong platform metadata / rules -> BRAND
-    2. CreatorType ML -> BRAND / KOC / KOL / UNKNOWN
+    Rule-based CreatorType Classification (Zero AI Cost):
+    BRAND/SELLER -> KOC -> KOL -> UNKNOWN
     """
-    bio = (creator_info.bio or "").lower()
+    full_text = f"{creator_info.username} {creator_info.displayName} {text_combined}".lower()
+    followers = getattr(creator_info, 'followers', 0)
     
-    # 1. High-precision override for BRAND
-    brand_keywords = ["official shop", "chính hãng", "customer service", "official corporate", "verified brand"]
-    if any(kw in bio for kw in brand_keywords):
+    # 1. BỘ LỌC ĐỎ (SELLER / BRAND)
+    seller_keywords = ["chuyên sỉ", "giá xưởng", "sỉ lẻ", "tuyển ctv", "tuyển đại lý", "official shop", "chính hãng", "nhập hàng"]
+    if any(kw in full_text for kw in seller_keywords):
         return "BRAND"
         
-    # 2. CreatorType ML Classifier
-    if ct_model:
-        try:
-            X_feats = extract_creator_features(creator_info, recent_posts, text_combined)
-            
-            # Tự động cắt bớt feature nếu Model cũ chỉ train trên 384 (Text) thay vì 391 (Text + Hành vi)
-            expected_features = getattr(ct_model, "n_features_in_", 384)
-            X_feats_for_model = X_feats[:expected_features]
-            
-            predicted_label = ct_model.predict(X_feats_for_model.reshape(1, -1))[0]
-            return str(predicted_label)
-        except Exception as e:
-            print(f"[!] Lỗi khi chạy ML CreatorType: {e}")
-            return None
-    
-    return None # Return None de Fallback qua LLM (Gemini) do chua train xong Model
+    # 2. BỘ LỌC XANH DƯƠNG (KOC)
+    koc_keywords = ["review", "unboxing", "mở hộp", "săn sale", "mua ở đây", "link mua"]
+    safe_links = ["beacons.ai", "linktr.ee", "shopee.vn", "bio.link", "instabio", "kol.eco", "mycollection.shop"]
+    if any(link in full_text for link in safe_links) or any(kw in full_text for kw in koc_keywords):
+        return "KOC"
+        
+    # 3. BỘ LỌC XANH LÁ (KOL)
+    kol_keywords = ["booking", "contact", "work", "hợp tác", "for work", "quảng cáo"]
+    has_contact = bool(creator_info.publicEmail or creator_info.publicPhone)
+    if followers >= 100000 and (has_contact or any(kw in full_text for kw in kol_keywords)):
+        return "KOL"
+        
+    # 4. CHƯA RÕ -> Trả về UNKNOWN (Để Manager duyệt)
+    return "UNKNOWN"
 
 import re
 from collections import Counter
@@ -317,7 +315,7 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
             Dựa trên Bio: '{bio}' và các Caption: '{captions}', và đang sở hữu {creator_info.followers} followers. 
             Hãy phân tích và trả về ĐÚNG định dạng JSON sau (không kèm markdown ```json hay text khác):
             {{
-                "summary": "Tóm tắt 1-2 câu về nội dung và giá trị kênh mang lại",
+                "summary": "Viết 1-2 câu TÓM TẮT nội dung kênh (Tuyệt đối KHÔNG copy lại thông tin liên hệ, SĐT, Email, hay giá booking từ Bio). Nếu không đủ dữ liệu, ghi: 'Kênh chia sẻ nội dung đời sống và giải trí.'",
                 "tags": ["3-5 từ khóa xu hướng, liền mạch (ví dụ: ẩm thực đồng quê, review xe)"],
                 "semanticTags": ["3-5 thẻ ngữ nghĩa sâu xa hơn (ví dụ: gia đình, chữa lành, công nghệ cốt lõi)"],
                 "topic": "Một chủ đề gợi ý (ví dụ: Ẩm thực nông thôn)",
@@ -384,8 +382,13 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
                 
                 is_selling = ai_data.get("isSelling", False)
                 summary = ai_data.get("summary", summary)
-                if is_selling:
-                    summary += " (Phát hiện: KOC có dấu hiệu thương mại, thường xuyên chèo kéo bán hàng hoặc review PR sản phẩm)."
+                
+                # CHẶN AI COPY BIO: Kiểm tra xem summary có chứa SĐT, email hay từ khóa rác không
+                if summary == bio or "for work" in summary.lower() or "@" in summary or re.search(r'\d{8,}', summary):
+                    summary = f"Creator tập trung vào ngách {niche.upper()}, thường xuyên đăng tải nội dung về: {', '.join(tags) if tags else 'đa dạng chủ đề'}."
+                
+                # if is_selling:
+                #     summary += " (Phát hiện: KOC có dấu hiệu thương mại, thường xuyên chèo kéo bán hàng hoặc review PR sản phẩm)."
                 
                 if ai_data.get("tags"): tags = ai_data["tags"]
                 if ai_data.get("semanticTags"): semantic_tags = ai_data["semanticTags"]

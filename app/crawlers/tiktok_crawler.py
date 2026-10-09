@@ -154,10 +154,26 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
             
             signature = user_info.get('signature', '')
             
-            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', signature)
+            # --- Tích hợp lấy Link Affiliate / Web vào Bio ---
+            bio_link = ""
+            if 'bioLink' in user_info and 'link' in user_info['bioLink']:
+                bio_link = user_info['bioLink']['link']
+                
+                # Decode TikTok's redirect link (target=...)
+                import urllib.parse
+                if "target=" in bio_link:
+                    try:
+                        raw_target = bio_link.split("target=")[1].split("&")[0]
+                        bio_link = urllib.parse.unquote(raw_target)
+                    except Exception:
+                        pass
+                        
+            full_bio = f"{signature} {bio_link}".strip()
+            
+            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', full_bio)
             public_email = email_match.group(0) if email_match else None
             
-            phone_match = re.search(r'(?:\+?84|0)(?:\s|\.)?\d{2,3}(?:\s|\.)?\d{3}(?:\s|\.)?\d{3,4}', signature)
+            phone_match = re.search(r'(?:\+?84|0)(?:\s|\.)?\d{2,3}(?:\s|\.)?\d{3}(?:\s|\.)?\d{3,4}', full_bio)
             public_phone = phone_match.group(0) if phone_match else None
 
             creator_info = CreatorInfo(
@@ -168,7 +184,7 @@ def _crawl_tiktok_profile_sync(username: str) -> Optional[IngestPayload]:
                 profileUrl=url,
                 avatarUrl=user_info.get('avatarLarger', user_info.get('avatarMedium')),
                 followers=followers,
-                bio=signature,
+                bio=full_bio,
                 publicEmail=public_email,
                 publicPhone=public_phone
             )

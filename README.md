@@ -12,7 +12,7 @@ Hệ thống đã được tích hợp sẵn 2 script quản lý:
 - **Chế độ chạy ngầm (Mặc định):**
   Double click vào `start.bat` (hoặc mở CMD gõ `start.bat`).
   Hệ thống sẽ tự khởi động ngầm:
-  1. **FastAPI Server** (Port `8001`)
+  1. **FastAPI Server** (Port `8000`)
   2. **Celery Worker** (Xử lý hàng đợi cào & phân tích AI)
   3. **Discovery Bot** (Tự động lướt tìm Creator TikTok mới)
 
@@ -24,7 +24,7 @@ Hệ thống đã được tích hợp sẵn 2 script quản lý:
 
 ### Tắt hệ thống (`stop.bat`)
 - Double click vào `stop.bat` (hoặc mở CMD gõ `stop.bat`).
-- Script sẽ tự động dọn dẹp các tiến trình chạy ngầm của Uvicorn, Celery và giải phóng Port `8001`.
+- Script sẽ tự động dọn dẹp các tiến trình chạy ngầm của Uvicorn, Celery và giải phóng Port `8000`.
 
 ---
 
@@ -40,7 +40,7 @@ docker start influencermatch_redis
 
 ### Bước 1: Khởi động FastAPI Server
 ```powershell
-.\venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+.\venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### Bước 2: Khởi động Celery Worker
@@ -58,7 +58,7 @@ docker start influencermatch_redis
 ## 🌐 3. Xem giao diện API & Test
 
 Sau khi khởi động server, truy cập Swagger UI trên trình duyệt:
-👉 **[http://localhost:8001/docs](http://localhost:8001/docs)**
+👉 **[http://localhost:8000/docs](http://localhost:8000/docs)**
 
 Các endpoint chính:
 - `GET /api/v1/crawl/tiktok?username={username}`: Cào dữ liệu TikTok trực tiếp.

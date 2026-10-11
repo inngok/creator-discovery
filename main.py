@@ -43,4 +43,6 @@ app.include_router(crawl_router.router)
 app.include_router(ai_router.router)
 
 if __name__ == "__main__":
+    # Reload with BKAI embed endpoint
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+

@@ -380,3 +380,47 @@
 [ERROR] - [2026-10-10 16:56:05] - [java_client] - Failed to POST to backend. Status: 404, Msg: <!doctype html><html lang="en"><head><title>HTTP Status 404 – Not Found</title><style type="text/css">body {font-family:Tahoma,Arial,sans-serif;} h1, h2, h3, b {color:white;background-color:#525D76;} h1 {font-size:22px;} h2 {font-size:16px;} h3 {font-size:14px;} p {font-size:12px;} a {color:black;} .line {height:1px;background-color:#525D76;border:none;}</style></head><body><h1>HTTP Status 404 – Not Found</h1><hr class="line" /><p><b>Type</b> Status Report</p><p><b>Message</b> The requested resource [&#47;api&#47;v1&#47;creators&#47;ingest] is not available</p><p><b>Description</b> The origin server did not find a current representation for the target resource or is not willing to disclose that one exists.</p><hr class="line" /><h3>Apache Tomcat/8.5.95</h3></body></html>
 [INFO] - [2026-10-10 16:56:05] - [celery_tasks] - [WORKER] Starting crawl for: zai93520
 [INFO] - [2026-10-10 16:56:05] - [celery_tasks] - [WORKER] Starting crawl for: thoitrangnu.02
+[INFO] - [2026-10-11 22:27:41] - [model_manager] - Loading ML models into memory...
+[INFO] - [2026-10-11 22:27:41] - [model_manager] - Successfully loaded Category model (v1.0.0)!
+[INFO] - [2026-10-11 22:27:41] - [model_manager] - Successfully loaded CreatorType model!
+[INFO] - [2026-10-11 22:28:08] - [model_manager] - Loading ML models into memory...
+[INFO] - [2026-10-11 22:28:08] - [model_manager] - Successfully loaded Category model (v1.0.0)!
+[INFO] - [2026-10-11 22:28:08] - [model_manager] - Successfully loaded CreatorType model!
+[INFO] - [2026-10-11 22:29:18] - [facebook_crawler] - [Facebook Crawler] Đang mở trang: https://www.facebook.com/babykopohome.page
+[INFO] - [2026-10-11 22:29:30] - [facebook_crawler] - [Facebook Crawler] Đang chạy phân tích AI cho KOC Facebook: Babykopo Home...
+[INFO] - [2026-10-11 22:29:30] - [app.ai.analyzer] - 
+[AI Pipeline] Dang phan tich ho so Creator: babykopohome.page
+[INFO] - [2026-10-11 22:29:30] - [app.ai.analyzer] - 
+[AI Pipeline] Dang phan tich ho so Creator: babykopohome.page
+[INFO] - [2026-10-11 22:29:30] - [app.ai.services.embedding_service] - [EmbeddingService] Dang tai mo hinh paraphrase-multilingual-MiniLM-L12-v2 vao RAM...
+[INFO] - [2026-10-11 22:29:30] - [app.ai.services.embedding_service] - [EmbeddingService] Dang tai mo hinh paraphrase-multilingual-MiniLM-L12-v2 vao RAM...
+[INFO] - [2026-10-11 22:29:43] - [app.ai.services.embedding_service] - [EmbeddingService] Da tai xong mo hinh!
+[INFO] - [2026-10-11 22:29:43] - [app.ai.services.embedding_service] - [EmbeddingService] Da tai xong mo hinh!
+[INFO] - [2026-10-11 22:29:45] - [app.ai.analyzer] - [*] Da tu dong nap 45 models cua Gemini vao Phao cuu sinh!
+[INFO] - [2026-10-11 22:29:45] - [app.ai.analyzer] - [*] Da tu dong nap 45 models cua Gemini vao Phao cuu sinh!
+[INFO] - [2026-10-11 22:29:45] - [app.ai.analyzer] - [*] Dang yeu cau LiteLLM dieu phoi AI (Uu tien: gemini/gemini-2.5-flash)...
+[INFO] - [2026-10-11 22:29:45] - [app.ai.analyzer] - [*] Dang yeu cau LiteLLM dieu phoi AI (Uu tien: gemini/gemini-2.5-flash)...
+[INFO] - [2026-10-11 22:30:08] - [app.ai.analyzer] - [+] Da lay duoc du lieu AI thanh cong (Model thuc te phuc vu: gemma-4-26b-a4b-it)!
+[INFO] - [2026-10-11 22:30:08] - [app.ai.analyzer] - [+] Da lay duoc du lieu AI thanh cong (Model thuc te phuc vu: gemma-4-26b-a4b-it)!
+[INFO] - [2026-10-11 22:30:08] - [app.ai.analyzer] - [*] Da luu nhan tu dong tu Gemini vao SQLite (Category: BEAUTY, Niche: UNKNOWN, Type: BRAND)
+[INFO] - [2026-10-11 22:30:08] - [app.ai.analyzer] - [*] Da luu nhan tu dong tu Gemini vao SQLite (Category: BEAUTY, Niche: UNKNOWN, Type: BRAND)
+[INFO] - [2026-10-11 22:30:08] - [app.ai.analyzer] - [Ket qua ML] Label: BEAUTY | Confidence: 0.69 | Engine: ENSEMBLE
+[INFO] - [2026-10-11 22:30:08] - [app.ai.analyzer] - [Ket qua ML] Label: BEAUTY | Confidence: 0.69 | Engine: ENSEMBLE
+[INFO] - [2026-10-11 22:30:08] - [app.ai.analyzer] -  -> Niche: UNKNOWN | Type: BRAND
+[INFO] - [2026-10-11 22:30:08] - [app.ai.analyzer] -  -> Niche: UNKNOWN | Type: BRAND
+[INFO] - [2026-10-11 22:34:21] - [model_manager] - Loading ML models into memory...
+[INFO] - [2026-10-11 22:34:21] - [model_manager] - Successfully loaded Category model (v1.0.0)!
+[INFO] - [2026-10-11 22:34:21] - [model_manager] - Successfully loaded CreatorType model!
+[INFO] - [2026-10-11 22:34:23] - [facebook_crawler] - [Facebook Crawler] Đang mở trang: https://www.facebook.com/babykopohome.page
+[INFO] - [2026-10-11 22:34:33] - [facebook_crawler] - [Facebook Crawler] Đang chạy phân tích AI cho KOC Facebook: Babykopo Home...
+[INFO] - [2026-10-11 22:34:55] - [model_manager] - Loading ML models into memory...
+[INFO] - [2026-10-11 22:34:55] - [model_manager] - Successfully loaded Category model (v1.0.0)!
+[INFO] - [2026-10-11 22:34:55] - [model_manager] - Successfully loaded CreatorType model!
+[INFO] - [2026-10-11 23:05:39] - [facebook_crawler] - [Facebook Crawler] Đang mở trang: https://www.facebook.com/KhoaiLangThang
+[INFO] - [2026-10-11 23:05:50] - [facebook_crawler] - [Facebook Crawler] Đang chạy phân tích AI cho KOC Facebook: Khoai Lang Thang...
+[INFO] - [2026-10-11 23:05:50] - [app.ai.analyzer] - 
+[AI Pipeline] Dang phan tich ho so Creator: KhoaiLangThang
+[INFO] - [2026-10-11 23:05:50] - [app.ai.analyzer] - 
+[AI Pipeline] Dang phan tich ho so Creator: KhoaiLangThang
+[INFO] - [2026-10-11 23:05:50] - [app.ai.services.embedding_service] - [EmbeddingService] Dang tai mo hinh paraphrase-multilingual-MiniLM-L12-v2 vao RAM...
+[INFO] - [2026-10-11 23:05:50] - [app.ai.services.embedding_service] - [EmbeddingService] Dang tai mo hinh paraphrase-multilingual-MiniLM-L12-v2 vao RAM...

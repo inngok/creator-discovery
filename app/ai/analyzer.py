@@ -17,7 +17,7 @@ from app.ai.config import (
 )
 from app.ai.schemas import PredictionResult
 from app.ai.services.embedding_service import embedding_service
-from app.core.models import AIEnrichment, CreatorInfo, Platform, Post
+from app.core.models import AIEnrichment, CreatorInfo, Post
 
 load_dotenv()
 
@@ -288,51 +288,24 @@ from app.core.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-def get_llm_enrichment(prompt: str, platform: Platform = None) -> dict | None:
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if platform == Platform.FACEBOOK and os.environ.get("GEMINI_API_KEY_FACEBOOK"):
-        gemini_key = os.environ.get("GEMINI_API_KEY_FACEBOOK")
-
+def get_llm_enrichment(prompt: str) -> dict | None:
+    # --- DYNAMIC MULTI-PROVIDER CASCADE (LITELLM) ---
     keys_status = {
-        "GEMINI": bool(gemini_key),
+        "GEMINI": bool(os.environ.get("GEMINI_API_KEY")),
         "GROQ": bool(os.environ.get("GROQ_API_KEY")),
         "OPENAI": bool(os.environ.get("OPENAI_API_KEY")),
     }
 
     fallback_models = []
     if keys_status["GEMINI"]:
-        try:
-            import google.generativeai as genai
-
-            genai.configure(api_key=gemini_key)
-            priority_models = [
-                "gemini/gemini-3.8-flash",
-                "gemini/gemini-3.5-flash",
+        fallback_models.extend(
+            [
+                "gemini/gemini-3.1-flash-lite",
+                "gemini/gemini-3.1-flash-lite-preview",
                 "gemini/gemini-3-flash-preview",
-                "gemini/gemini-flash-latest",
-                "gemini/gemini-flash-lite-latest",
-                "gemini/gemini-1.5-flash",
-                "gemini/gemini-2.0-flash",
+                "gemini/gemma-4-26b-a4b-it",
             ]
-            for pm in priority_models:
-                if pm not in fallback_models:
-                    fallback_models.append(pm)
-
-            for m in genai.list_models():
-                if "generateContent" in m.supported_generation_methods:
-                    lite_name = m.name.replace("models/", "gemini/")
-                    if any(x in lite_name.lower() for x in ['tts', 'audio', 'embedding', 'image', 'imagen', 'aqa']):
-                        continue
-                    if lite_name not in fallback_models:
-                        fallback_models.append(lite_name)
-        except Exception as e:
-            fallback_models.extend(
-                [
-                    "gemini/gemini-3.8-flash",
-                    "gemini/gemini-1.5-flash",
-                    "gemini/gemini-pro",
-                ]
-            )
+        )
 
     if keys_status["GROQ"]:
         fallback_models.append("groq/llama-3.3-70b-versatile")
@@ -342,11 +315,13 @@ def get_llm_enrichment(prompt: str, platform: Platform = None) -> dict | None:
     response_text = None
     if fallback_models:
         try:
+            logger.info(
+                f"[*] Dang yeu cau LiteLLM dieu phoi AI (Uu tien: {fallback_models[0]})..."
+            )
             response = litellm.completion(
                 model=fallback_models[0],
                 messages=[{"role": "user", "content": prompt}],
                 fallbacks=fallback_models[1:] if len(fallback_models) > 1 else [],
-                api_key=gemini_key,
             )
 
             if response and response.choices:
@@ -359,7 +334,12 @@ def get_llm_enrichment(prompt: str, platform: Platform = None) -> dict | None:
 
     if response_text:
         clean_text = response_text.strip()
-        if clean_text.startswith("```json"):
+        import re
+
+        json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
+        if json_match:
+            clean_text = json_match.group(0)
+        elif clean_text.startswith("```json"):
             clean_text = clean_text[7:]
         elif clean_text.startswith("```"):
             clean_text = clean_text[3:]
@@ -460,7 +440,8 @@ def process_ai_enrichment(
                 "creatorTypeFallback": "Chọn 1 trong 4 loại: KOL (người nổi tiếng, chuyên gia, nghệ sĩ, có sức ảnh hưởng, thường >100k followers), KOC (tập trung review sản phẩm, unbox, gắn link affiliate, chốt đơn, mọi mức follower), BRAND (tài khoản chính thức công ty/thương hiệu), USER (người bình thường chia sẻ đời sống cá nhân, không có yếu tố thương mại)"
                 """
             prompt += "\n}"
-            ai_data = get_llm_enrichment(prompt, platform=getattr(creator_info, "platform", None))
+
+            ai_data = get_llm_enrichment(prompt)
 
             if ai_data:
                 is_selling = ai_data.get("isSelling", False)
@@ -498,6 +479,7 @@ def process_ai_enrichment(
                     _save_auto_label_metrics(
                         creator_info, text_combined, category, niche, creator_type
                     )
+
         except Exception as e:
             logger.info(f"[Canh bao] Khong the goi Gemini hoac loi JSON: {e}")
 

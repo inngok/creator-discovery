@@ -9,7 +9,7 @@ from app.workers.tasks import process_facebook_profile, process_tiktok_profile
 router = APIRouter(prefix="/api/v1/crawl", tags=["Crawl"])
 
 
-@router.get("/youtube", response_model=IngestPayload, summary="Cào dữ liệu Channel YouTube")
+@router.get("/youtube", response_model=IngestPayload)
 async def crawl_youtube(handle: str):
     try:
         profile = await crawl_youtube_channel(handle)
@@ -24,7 +24,7 @@ async def crawl_youtube(handle: str):
         raise HTTPException(status_code=500, detail=f"Failed to crawl YouTube: {e}")
 
 
-@router.get("/tiktok", response_model=IngestPayload, summary="Cào trực tiếp Profile TikTok")
+@router.get("/tiktok", response_model=IngestPayload)
 async def crawl_tiktok(username: str):
     try:
         profile = await crawl_tiktok_profile(username)
@@ -40,7 +40,7 @@ async def crawl_tiktok(username: str):
         raise HTTPException(status_code=500, detail=f"Failed to crawl TikTok: {e}")
 
 
-@router.post("/tiktok/enqueue", summary="Đưa Profile TikTok vào hàng đợi Celery")
+@router.post("/tiktok/enqueue")
 async def enqueue_tiktok(username: str) -> dict:
     try:
         process_tiktok_profile.delay(username)

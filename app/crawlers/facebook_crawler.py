@@ -149,7 +149,7 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
             elif meta_desc and meta_desc.get("content"):
                 raw_bio = meta_desc.get("content")
 
-            # 2. Bóc tách số lượng Followers
+            # 2. Bóc tách số lượng Followers (từ og_desc hoặc meta_desc)
             followers = 0
             follower_match = re.search(
                 r"([\d\.,]+[KMBTr]?)\s*(?:người theo dõi|followers|lượt thích|likes)",
@@ -174,7 +174,15 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
                 if fallback_match:
                     followers = parse_stat_number(fallback_match.group(1))
 
-            # 3. Bóc tách Email & SĐT liên hệ Booking từ Bio
+            # Loại bỏ tiền tố thống kê tự sinh của Facebook ("... người theo dõi · ... người đang nói về điều này.")
+            clean_bio = re.sub(
+                r"^.*?[\d\.,]+[KMBTr]?\s*(?:người theo dõi|followers|lượt thích|likes).*?(?:đang nói về điều này|talking about this)[\.\s·-]*",
+                "",
+                raw_bio,
+                flags=re.IGNORECASE,
+            ).strip()
+
+            # 3. Bóc tách Email & SĐT liên hệ Booking từ Bio hoặc trang
             email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", raw_bio)
             public_email = email_match.group(0) if email_match else None
 
@@ -271,7 +279,7 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
                 profileUrl=url,
                 avatarUrl=avatar_url,
                 followers=followers,
-                bio=raw_bio,
+                bio=clean_bio,
                 publicEmail=public_email,
                 publicPhone=public_phone,
             )

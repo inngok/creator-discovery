@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 import litellm
 
-from app.core.models import CreatorInfo, Post, AIEnrichment
+from app.core.models import CreatorInfo, Post, AIEnrichment, Platform
 from app.ai.schemas import PredictionResult
 from app.ai.services.embedding_service import embedding_service
 from app.ai.config import CATEGORY_UNKNOWN_THRESHOLD
@@ -331,29 +331,47 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
                 """
             prompt += "\n}"
             
+            # Xac dinh Gemini API Key (Facebook co key rieng de tranh het quota)
+            gemini_key = os.environ.get("GEMINI_API_KEY")
+            if getattr(creator_info, 'platform', None) == Platform.FACEBOOK and os.environ.get("GEMINI_API_KEY_FACEBOOK"):
+                gemini_key = os.environ.get("GEMINI_API_KEY_FACEBOOK")
+
             # --- DYNAMIC MULTI-PROVIDER CASCADE (LITELLM) ---
             keys_status = {
-                "GEMINI": bool(os.environ.get("GEMINI_API_KEY")),
+                "GEMINI": bool(gemini_key),
                 "GROQ": bool(os.environ.get("GROQ_API_KEY")),
                 "OPENAI": bool(os.environ.get("OPENAI_API_KEY")),
             }
             
             fallback_models = []
             if keys_status["GEMINI"]:
-                # --- PHUC HOI "BI THUAT" TU DONG QUET 33+ MODELS CUA GEMINI ---
                 try:
                     import google.generativeai as genai
-                    genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+                    genai.configure(api_key=gemini_key)
+                    # Uu tien cac model Flash the he moi nhat ho tro Text va con Quota
+                    priority_models = [
+                        "gemini/gemini-3.8-flash",
+                        "gemini/gemini-3.5-flash",
+                        "gemini/gemini-3-flash-preview",
+                        "gemini/gemini-flash-latest",
+                        "gemini/gemini-flash-lite-latest",
+                        "gemini/gemini-1.5-flash",
+                        "gemini/gemini-2.0-flash",
+                    ]
+                    for pm in priority_models:
+                        if pm not in fallback_models:
+                            fallback_models.append(pm)
+
                     for m in genai.list_models():
                         if 'generateContent' in m.supported_generation_methods:
-                            # Chuyen doi ten "models/gemini-pro" thanh chuan cua LiteLLM la "gemini/gemini-pro"
                             lite_name = m.name.replace("models/", "gemini/")
+                            # Loại trừ các model TTS, Audio, Embedding, Image
+                            if any(x in lite_name.lower() for x in ['tts', 'audio', 'embedding', 'image', 'imagen', 'aqa']):
+                                continue
                             if lite_name not in fallback_models:
                                 fallback_models.append(lite_name)
-                    print(f"[*] Da tu dong nap {len(fallback_models)} models cua Gemini vao Phao cuu sinh!")
                 except Exception as e:
-                    print(f"[-] Quet Gemini Models that bai, dung tam Hardcode. Loi: {e}")
-                    fallback_models.extend(["gemini/gemini-1.5-flash", "gemini/gemini-1.5-pro", "gemini/gemini-pro"])
+                    fallback_models.extend(["gemini/gemini-3.8-flash", "gemini/gemini-1.5-flash", "gemini/gemini-pro"])
             
             if keys_status["GROQ"]: fallback_models.append("groq/llama-3.3-70b-versatile")
             if keys_status["OPENAI"]: fallback_models.append("openai/gpt-4o-mini")
@@ -361,18 +379,17 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
             response_text = None
             if fallback_models:
                 try:
-                    print(f"[*] Dang yeu cau LiteLLM dieu phoi AI (Uu tien: {fallback_models[0]})...")
                     response = litellm.completion(
                         model=fallback_models[0],
                         messages=[{"role": "user", "content": prompt}],
                         fallbacks=fallback_models[1:] if len(fallback_models) > 1 else [],
+                        api_key=gemini_key
                     )
                     
                     if response and response.choices:
                         response_text = response.choices[0].message.content
-                        print(f"[+] Da lay duoc du lieu AI thanh cong (Model thuc te phuc vu: {response.model})!")
                 except Exception as cascade_e:
-                    print(f"[-] Tat ca cac phao cuu sinh AI deu that bai: {cascade_e}")
+                    print(f"[-] AI cascade error: {cascade_e}")
             
             if response_text:
                 clean_text = response_text.strip()
@@ -416,7 +433,6 @@ def process_ai_enrichment(creator_info: CreatorInfo, recent_posts: List[Post]) -
                         followers=creator_info.followers,
                         source="GEMINI_AUTO_LABEL"
                     )
-                    print(f"[*] Da luu nhan tu dong tu Gemini vao SQLite (Category: {category}, Niche: {niche}, Type: {creator_type})")
                         
         except Exception as e:
             print(f"[Canh bao] Khong the goi Gemini hoac loi JSON: {e}")

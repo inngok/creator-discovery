@@ -1,30 +1,83 @@
 # InfluencerMatch Crawler API
 
-Hệ thống tự động cào dữ liệu KOC/KOL từ TikTok, tích hợp AI phân tích và tự động gửi dữ liệu về Java Backend.
+Hệ thống tự động cào dữ liệu KOC/KOL từ đa nền tảng (**TikTok, Facebook, YouTube**), tích hợp **AI Enrichment** (phân loại Category, Niche, CreatorType, Summary, Topic) và tự động chuẩn hóa gửi dữ liệu sang Java Backend.
 
-## 🚀 Cách chạy hệ thống
+---
 
-Chỉ cần mở thư mục dự án và **Click đúp vào file `start_all.bat`**. 
-Hệ thống sẽ chạy NGẦM hoàn toàn (không hiện cửa sổ cmd gây phiền phức):
-1. **API Server** (Nhận lệnh)
-2. **Celery Worker** (Đội công nhân cào data song song)
-3. **Discovery Bot** (Tự động lướt trang xu hướng TikTok tìm username mới)
+## 🚀 1. Cách chạy nhanh (Khuyên dùng)
 
-*Để tắt toàn bộ hệ thống, hãy click đúp vào file `stop_all.bat`.*
+Hệ thống đã được tích hợp sẵn 2 script quản lý:
 
-## 🌐 Xem giao diện API (UI)
+### Khởi động hệ thống (`start.bat`)
+- **Chế độ chạy ngầm (Mặc định):**
+  Double click vào `start.bat` (hoặc mở CMD gõ `start.bat`).
+  Hệ thống sẽ tự khởi động ngầm:
+  1. **FastAPI Server** (Port `8001`)
+  2. **Celery Worker** (Xử lý hàng đợi cào & phân tích AI)
+  3. **Discovery Bot** (Tự động lướt tìm Creator TikTok mới)
 
-Sau khi chạy hệ thống, mở trình duyệt và truy cập:
-👉 **[http://localhost:8001/docs](http://localhost:8001/docs)** 
+- **Chế độ hiện cửa sổ console riêng (Visible mode - để debug & xem log trực tiếp):**
+  Mở CMD hoặc PowerShell tại thư mục dự án và gõ:
+  ```cmd
+  start.bat visible
+  ```
 
-*(Tại đây bạn có thể nhập 1 username bất kỳ vào API `GET /api/v1/crawl/tiktok` để cào thử)*
+### Tắt hệ thống (`stop.bat`)
+- Double click vào `stop.bat` (hoặc mở CMD gõ `stop.bat`).
+- Script sẽ tự động dọn dẹp các tiến trình chạy ngầm của Uvicorn, Celery và giải phóng Port `8001`.
 
-## ⚙️ Cấu hình
+---
 
-Sửa file `.env` nếu cần thiết:
-- `GEMINI_API_KEY`: Bắt buộc phải có để phân loại KOC/KOL.
-- `JAVA_BACKEND_URL`: Đường link để ném kết quả JSON sang cho team Java.
+## 🛠️ 2. Cách chạy thủ công từng dịch vụ (Dành cho Developer)
 
+Nếu muốn tự chạy từng service riêng biệt để kiểm tra log:
 
-.\start_all.bat
-.\stop_all.bat
+### Bước 0: Bật Redis
+```powershell
+docker start influencermatch_redis
+# Hoặc khởi động redis server cài trên máy
+```
+
+### Bước 1: Khởi động FastAPI Server
+```powershell
+.\venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+```
+
+### Bước 2: Khởi động Celery Worker
+```powershell
+.\venv\Scripts\celery.exe -A app.workers.celery_app worker --loglevel=info --pool=threads --concurrency=1
+```
+
+### Bước 3: Khởi động Discovery Bot (Tùy chọn)
+```powershell
+.\venv\Scripts\python.exe -m app.scripts.discovery_bot
+```
+
+---
+
+## 🌐 3. Xem giao diện API & Test
+
+Sau khi khởi động server, truy cập Swagger UI trên trình duyệt:
+👉 **[http://localhost:8001/docs](http://localhost:8001/docs)**
+
+Các endpoint chính:
+- `GET /api/v1/crawl/tiktok?username={username}`: Cào dữ liệu TikTok trực tiếp.
+- `POST /api/v1/crawl/tiktok/enqueue?username={username}`: Đưa vào hàng đợi Celery cào ngầm + AI.
+- `GET /api/v1/crawl/facebook?username={username}`: Cào fanpage/profile Facebook (Playwright Stealth + AI).
+- `GET /api/v1/crawl/youtube?channel_id={id}`: Cào kênh YouTube qua API.
+
+---
+
+## ⚙️ 4. Cấu hình môi trường (`.env`)
+
+Cấu hình các khóa trong file `.env`:
+```env
+# AI Services
+GEMINI_API_KEY=your_gemini_api_key
+
+# Java Backend
+JAVA_BACKEND_URL=http://localhost:8080/api/v1/creators/ingest
+
+# Redis Queue
+REDIS_URL=redis://localhost:6379/0
+```

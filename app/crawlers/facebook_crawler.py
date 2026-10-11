@@ -298,22 +298,11 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
         finally:
             browser.close()
 
-    # Chạy phân tích AI (Niche, CreatorType, Bóc tách chiến dịch review)
-    logger.info(
-        f"[Facebook Crawler] Đang chạy phân tích AI cho KOC Facebook: {display_name}..."
-    )
-    ai_enrichment = None
-    try:
-        from app.ai.analyzer import process_ai_enrichment
-
-        ai_enrichment = process_ai_enrichment(creator_info, recent_posts)
-    except Exception as ai_err:
-        logger.warning(f"[Facebook Crawler] Lỗi AI Enrichment: {ai_err}")
-
+    # AI Enrichment đã được tách ra khỏi Crawler và được gọi ở Worker (giống TikTok)
     return IngestPayload(
         creator=creator_info,
         recentPosts=recent_posts,
-        aiEnrichment=ai_enrichment,
+        aiEnrichment=None,
         source="PLAYWRIGHT_STEALTH_FACEBOOK",
     )
 

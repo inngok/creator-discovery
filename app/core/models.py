@@ -1,7 +1,8 @@
+from datetime import UTC, datetime
 from enum import Enum
-from typing import List, Optional
-from datetime import datetime, timezone
+
 from pydantic import BaseModel, Field
+
 
 class Platform(str, Enum):
     TIKTOK = "TIKTOK"
@@ -9,42 +10,75 @@ class Platform(str, Enum):
     INSTAGRAM = "INSTAGRAM"
     FACEBOOK = "FACEBOOK"
 
+
 class CreatorInfo(BaseModel):
     platform: Platform
     externalId: str = Field(..., description="ID gốc từ platform cấp, NOT NULL")
     username: str = Field(..., description="handle account, NOT NULL")
     displayName: str = Field(..., description="NOT NULL")
     profileUrl: str = Field(..., description="NOT NULL")
-    avatarUrl: Optional[str] = None
+    avatarUrl: str | None = None
     followers: int = Field(..., description="NOT NULL")
-    bio: Optional[str] = None
-    
+    bio: str | None = None
+
     # Optional commercial contact info (extra fields not in example but useful)
-    publicEmail: Optional[str] = None
-    publicPhone: Optional[str] = None
+    publicEmail: str | None = None
+    publicPhone: str | None = None
+
 
 class Post(BaseModel):
     platformPostId: str
     postUrl: str
     caption: str
-    views: Optional[int] = 0
-    likes: Optional[int] = 0
-    comments: Optional[int] = 0
-    shares: Optional[int] = 0
-    postedAt: Optional[str] = None
+    views: int | None = 0
+    likes: int | None = 0
+    comments: int | None = 0
+    shares: int | None = 0
+    postedAt: str | None = None
+
 
 class AIEnrichment(BaseModel):
-    niche: Optional[str] = None
-    category: Optional[str] = None
-    creatorType: Optional[str] = None
-    contentSummary: Optional[str] = None
-    tags: List[str] = Field(default_factory=list) # Raw AI tags if needed
-    suggestedTopic: Optional[str] = None
-    semanticTags: List[str] = Field(default_factory=list)
+    niche: str | None = None
+    category: str | None = None
+    creatorType: str | None = None
+    contentSummary: str | None = None
+    tags: list[str] = Field(default_factory=list)  # Raw AI tags if needed
+    suggestedTopic: str | None = None
+    semanticTags: list[str] = Field(default_factory=list)
+
 
 class IngestPayload(BaseModel):
     creator: CreatorInfo
-    recentPosts: List[Post] = Field(default_factory=list)
-    aiEnrichment: Optional[AIEnrichment] = None
+    recentPosts: list[Post] = Field(default_factory=list)
+    aiEnrichment: AIEnrichment | None = None
     source: str
-    collectedAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    collectedAt: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def avg_views(self) -> float:
+        valid_vals = [p.views for p in self.recentPosts if p.views is not None]
+        return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+
+    @property
+    def avg_likes(self) -> float:
+        valid_vals = [p.likes for p in self.recentPosts if p.likes is not None]
+        return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+
+    @property
+    def avg_comments(self) -> float:
+        valid_vals = [p.comments for p in self.recentPosts if p.comments is not None]
+        return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+
+    @property
+    def avg_shares(self) -> float:
+        valid_vals = [p.shares for p in self.recentPosts if p.shares is not None]
+        return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+
+    @property
+    def engagement_rate(self) -> float:
+        followers = self.creator.followers
+        if followers <= 0:
+            return 0.0
+        return (
+            (self.avg_likes + self.avg_comments + self.avg_shares) / followers
+        ) * 100

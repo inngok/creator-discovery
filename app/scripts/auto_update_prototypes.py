@@ -1,31 +1,39 @@
+import json
 import os
 import sqlite3
-import json
+
 import yake
+
+from app.core.logger import setup_logger
+
+logger = setup_logger(__name__)
+
 
 # Đường dẫn tĩnh tới các file
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, 'ai', 'data', 'ai_training.db')
-PROTOTYPES_PATH = os.path.join(BASE_DIR, 'ai', 'data', 'prototypes.json')
+DB_PATH = os.path.join(BASE_DIR, "ai", "data", "ai_training.db")
+PROTOTYPES_PATH = os.path.join(BASE_DIR, "ai", "data", "prototypes.json")
+
 
 def get_new_training_data():
     if not os.path.exists(DB_PATH):
-        print(f"[-] Không tìm thấy Database tại {DB_PATH}")
+        logger.info(f"[-] Không tìm thấy Database tại {DB_PATH}")
         return []
-    
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     # Lấy các bản ghi do Gemini tự động gán nhãn
-    cursor.execute('''
+    cursor.execute("""
         SELECT category, niche, combined_text 
         FROM training_logs 
         WHERE source = 'GEMINI_AUTO_LABEL' 
         AND category IS NOT NULL 
         AND category != 'UNKNOWN'
-    ''')
+    """)
     rows = cursor.fetchall()
     conn.close()
     return rows
+
 
 def extract_keywords(text: str, top_n: int = 5):
     if not text or len(text.strip()) == 0:
@@ -35,42 +43,43 @@ def extract_keywords(text: str, top_n: int = 5):
     keywords = kw_extractor.extract_keywords(text)
     return [kw[0] for kw in keywords]
 
+
 def update_prototypes():
     rows = get_new_training_data()
     if not rows:
-        print("[!] Không có dữ liệu huấn luyện mới từ Gemini trong Database.")
+        logger.info("[!] Không có dữ liệu huấn luyện mới từ Gemini trong Database.")
         return
 
-    print(f"[*] Đang phân tích {len(rows)} bài viết khó do Gemini gán nhãn...")
-    
+    logger.info(f"[*] Đang phân tích {len(rows)} bài viết khó do Gemini gán nhãn...")
+
     # Gom nhóm bài viết theo Category và Niche
     cat_texts = {}
     niche_texts = {}
-    
+
     for cat, niche, text in rows:
         if cat:
             cat_texts[cat] = cat_texts.get(cat, "") + " " + text
-        if cat and niche and niche != 'UNKNOWN':
+        if cat and niche and niche != "UNKNOWN":
             key = (cat, niche)
             niche_texts[key] = niche_texts.get(key, "") + " " + text
-            
+
     # Load thư viện JSON cũ
     if not os.path.exists(PROTOTYPES_PATH):
-        print("[-] Không tìm thấy file prototypes.json")
+        logger.info("[-] Không tìm thấy file prototypes.json")
         return
-        
-    with open(PROTOTYPES_PATH, 'r', encoding='utf-8') as f:
+
+    with open(PROTOTYPES_PATH, "r", encoding="utf-8") as f:
         protos = json.load(f)
-        
+
     cat_protos = protos.get("CATEGORY_PROTOTYPES", {})
     niche_protos = protos.get("NICHE_PROTOTYPES", {})
-    
+
     updated_count = 0
-    
+
     # 1. Khai thác và đắp thêm từ khóa cho Lĩnh vực (Category)
-    print("\n--- ĐANG CẬP NHẬT TỪ KHÓA LĨNH VỰC (CATEGORY) ---")
+    logger.info("\n--- ĐANG CẬP NHẬT TỪ KHÓA LĨNH VỰC (CATEGORY) ---")
     for cat, text in cat_texts.items():
-        new_kws = extract_keywords(text, top_n=10) # Lấy top 10 từ khóa mới
+        new_kws = extract_keywords(text, top_n=10)  # Lấy top 10 từ khóa mới
         if cat in cat_protos:
             added = []
             for kw in new_kws:
@@ -79,13 +88,13 @@ def update_prototypes():
                     cat_protos[cat] += f" {kw}"
                     added.append(kw)
             if added:
-                print(f"[+] {cat}: Thêm từ khóa mới -> {', '.join(added)}")
+                logger.info(f"[+] {cat}: Thêm từ khóa mới -> {', '.join(added)}")
                 updated_count += len(added)
-                
+
     # 2. Khai thác và đắp thêm từ khóa cho Ngách (Niche)
-    print("\n--- ĐANG CẬP NHẬT TỪ KHÓA NGÁCH (NICHE) ---")
+    logger.info("\n--- ĐANG CẬP NHẬT TỪ KHÓA NGÁCH (NICHE) ---")
     for (cat, niche), text in niche_texts.items():
-        new_kws = extract_keywords(text, top_n=5) # Lấy top 5 từ khóa ngách
+        new_kws = extract_keywords(text, top_n=5)  # Lấy top 5 từ khóa ngách
         if cat in niche_protos and niche in niche_protos[cat]:
             added = []
             for kw in new_kws:
@@ -93,22 +102,31 @@ def update_prototypes():
                     niche_protos[cat][niche] += f" {kw}"
                     added.append(kw)
             if added:
-                print(f"[+] {cat} -> {niche}: Thêm từ khóa mới -> {', '.join(added)}")
+                logger.info(
+                    f"[+] {cat} -> {niche}: Thêm từ khóa mới -> {', '.join(added)}"
+                )
                 updated_count += len(added)
-                
+
     # 3. Lưu đè lại file JSON
     if updated_count > 0:
         protos["CATEGORY_PROTOTYPES"] = cat_protos
         protos["NICHE_PROTOTYPES"] = niche_protos
-        with open(PROTOTYPES_PATH, 'w', encoding='utf-8') as f:
+        with open(PROTOTYPES_PATH, "w", encoding="utf-8") as f:
             json.dump(protos, f, ensure_ascii=False, indent=2)
-        print(f"\n[V] THÀNH CÔNG! Đã cập nhật thêm {updated_count} từ khóa mới vào file prototypes.json.")
-        print("[*] AI của bạn đã tự động thông minh hơn mà không cần restart Server!")
+        logger.info(
+            f"\n[V] THÀNH CÔNG! Đã cập nhật thêm {updated_count} từ khóa mới vào file prototypes.json."
+        )
+        logger.info(
+            "[*] AI của bạn đã tự động thông minh hơn mà không cần restart Server!"
+        )
     else:
-        print("\n[*] Hệ thống đã tối ưu, chưa phát hiện từ khóa lóng/xu hướng nào mới lạ cần thêm vào.")
+        logger.info(
+            "\n[*] Hệ thống đã tối ưu, chưa phát hiện từ khóa lóng/xu hướng nào mới lạ cần thêm vào."
+        )
+
 
 if __name__ == "__main__":
-    print("==================================================")
-    print(" VÒNG LẶP HỌC TẬP (DATA FLYWHEEL) - AUTO RETRAIN")
-    print("==================================================")
+    logger.info("==================================================")
+    logger.info(" VÒNG LẶP HỌC TẬP (DATA FLYWHEEL) - AUTO RETRAIN")
+    logger.info("==================================================")
     update_prototypes()

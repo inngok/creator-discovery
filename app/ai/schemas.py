@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+
 class PredictionResult(BaseModel):
     """
     Schema chuan cho moi ket qua tra ve tu cac AI Services.
@@ -8,6 +9,7 @@ class PredictionResult(BaseModel):
     - engine: Ten dong co xu ly (VD: "ML", "LLM", "FALLBACK")
     - needs_review: Co can con nguoi kiem tra lai khong (True/False)
     """
+
     label: str
     confidence: float
     engine: str

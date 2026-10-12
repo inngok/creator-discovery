@@ -298,27 +298,14 @@ def get_llm_enrichment(prompt: str) -> dict | None:
 
     fallback_models = []
     if keys_status["GEMINI"]:
-        try:
-            import google.generativeai as genai
-
-            genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-            for m in genai.list_models():
-                if "generateContent" in m.supported_generation_methods:
-                    lite_name = m.name.replace("models/", "gemini/")
-                    if lite_name not in fallback_models:
-                        fallback_models.append(lite_name)
-            logger.info(
-                f"[*] Da tu dong nap {len(fallback_models)} models cua Gemini vao Phao cuu sinh!"
-            )
-        except Exception as e:
-            logger.info(f"[-] Quet Gemini Models that bai, dung tam Hardcode. Loi: {e}")
-            fallback_models.extend(
-                [
-                    "gemini/gemini-1.5-flash",
-                    "gemini/gemini-1.5-pro",
-                    "gemini/gemini-pro",
-                ]
-            )
+        fallback_models.extend(
+            [
+                "gemini/gemini-3.1-flash-lite",
+                "gemini/gemini-3.1-flash-lite-preview",
+                "gemini/gemini-3-flash-preview",
+                "gemini/gemma-4-26b-a4b-it",
+            ]
+        )
 
     if keys_status["GROQ"]:
         fallback_models.append("groq/llama-3.3-70b-versatile")
@@ -347,7 +334,12 @@ def get_llm_enrichment(prompt: str) -> dict | None:
 
     if response_text:
         clean_text = response_text.strip()
-        if clean_text.startswith("```json"):
+        import re
+
+        json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
+        if json_match:
+            clean_text = json_match.group(0)
+        elif clean_text.startswith("```json"):
             clean_text = clean_text[7:]
         elif clean_text.startswith("```"):
             clean_text = clean_text[3:]

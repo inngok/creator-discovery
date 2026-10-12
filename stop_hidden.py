@@ -35,23 +35,24 @@ subprocess.run(
     stderr=subprocess.DEVNULL,
 )
 
-# Kill any process holding port 8001
-try:
-    netstat_out = subprocess.check_output(
-        'netstat -aon | find ":8001" | find "LISTENING"', shell=True, text=True
-    )
-    for line in netstat_out.strip().split("\n"):
-        if line:
-            parts = line.split()
-            if len(parts) >= 5:
-                pid = parts[-1]
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", pid],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                print(f"Da xoa zombie process o cong 8001 (PID: {pid})")
-except subprocess.CalledProcessError:
-    pass  # Khong tim thay process nao
+# Kill any process holding port 8000 or 8001
+for port in ["8000", "8001"]:
+    try:
+        netstat_out = subprocess.check_output(
+            f'netstat -aon | find ":{port}" | find "LISTENING"', shell=True, text=True
+        )
+        for line in netstat_out.strip().split("\n"):
+            if line:
+                parts = line.split()
+                if len(parts) >= 5:
+                    pid = parts[-1]
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", pid],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    print(f"Da xoa zombie process o cong {port} (PID: {pid})")
+    except subprocess.CalledProcessError:
+        pass  # Khong tim thay process nao
 
 print("Da don dep hoan toan!")

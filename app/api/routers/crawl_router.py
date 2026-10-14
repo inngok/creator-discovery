@@ -52,7 +52,7 @@ async def enqueue_tiktok(username: str) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/facebook", response_model=IngestPayload, summary="Cào trực tiếp Fanpage KOC Facebook")
+@router.get("/facebook", response_model=IngestPayload, summary="Cào trực tiếp Facebook")
 async def crawl_facebook(username: str):
     try:
         profile = await crawl_facebook_profile(username)
@@ -68,7 +68,7 @@ async def crawl_facebook(username: str):
         raise HTTPException(status_code=500, detail=f"Failed to crawl Facebook: {e}")
 
 
-@router.post("/facebook/enqueue", summary="Đưa KOC Facebook vào hàng đợi Celery")
+@router.post("/facebook/enqueue", summary="Đưa Creator Facebook vào hàng đợi Celery")
 async def enqueue_facebook(username: str) -> dict:
     try:
         process_facebook_profile.delay(username)

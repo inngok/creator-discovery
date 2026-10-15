@@ -60,16 +60,6 @@ SIMILARITY_LEVELS = (
     (0.0, "ít phù hợp"),
 )
 
-NICHE_CLUSTERS = {
-    "beauty": {"beauty", "skincare", "cosmetics", "makeup", "làm đẹp", "mỹ phẩm", "chăm sóc da", "son môi", "dưỡng da"},
-    "fashion": {"fashion", "thời trang", "outfit", "style", "phụ kiện", "quần áo", "shoes", "giày dép"},
-    "food": {"food", "ẩm thực", "ăn uống", "cooking", "nấu ăn", "quán ngon", "review ăn uống"},
-    "tech": {"tech", "technology", "công nghệ", "gaming", "thiết bị", "điện thoại", "laptop", "gadget", "game"},
-    "lifestyle": {"lifestyle", "đời sống", "du lịch", "travel", "vlog", "gia đình", "daily", "cuộc sống"},
-    "fitness": {"fitness", "gym", "workout", "sức khỏe", "health", "thể thao", "yoga", "dinh dưỡng"},
-    "entertainment": {"entertainment", "giải trí", "hài kịch", "comedy", "âm nhạc", "music", "dance"},
-}
-
 IGNORED_NICHES = frozenset({"general", "unknown", "khác", "khac", ""})
 
 
@@ -129,15 +119,14 @@ def _calculate_semantic_score(similarity_score: float) -> tuple[float, str]:
     return pct, reason
 
 
-def _find_cluster(text: str) -> str | None:
-    """Tìm cluster nhóm ngành từ từ khóa."""
-    lowered = text.lower()
-    return next((cluster for cluster, keywords in NICHE_CLUSTERS.items() if any(kw in lowered for kw in keywords)), None)
-
-
 def _calculate_niche_score(data: ExplanationInput) -> tuple[float, str]:
     """
     Tiêu chí 4: nicheMatchScore
+    Tính toán động không hardcode từ điển:
+    - Exact match Niche trong Brief: 100 điểm.
+    - Tag match trong Brief: 90 điểm.
+    - Category match trong Brief: 85 điểm.
+    - Related match: dựa theo Semantic Similarity Score từ Vector Search.
     """
     brief = (data.campaign_brief or "").strip().lower()
     niche = (data.niche or "").strip().lower()
@@ -145,24 +134,35 @@ def _calculate_niche_score(data: ExplanationInput) -> tuple[float, str]:
     niche_info = f"{data.category} / {data.niche}" if data.niche else data.category
 
     if not brief:
-        return (85.0 if niche not in IGNORED_NICHES else 60.0), f"Hoạt động chuyên môn trong lĩnh vực {niche_info}."
+        base_score = 85.0 if niche not in IGNORED_NICHES else 60.0
+        score = round(data.similarity_score * 100.0, 1) if data.similarity_score > 0 else base_score
+        return score, f"Hoạt động chuyên môn trong lĩnh vực {niche_info}."
 
-    # 1. Exact Match trong brief
+    # 1. Exact Match Niche trong brief -> 100 điểm
     if niche not in IGNORED_NICHES and (niche in brief or any(w in brief for w in niche.split() if len(w) > 2)):
         return 100.0, f"Chuyên sâu về lĩnh vực {niche_info}, đúng trọng tâm mặt hàng cần quảng bá."
 
-    # 2. Tag match
+    # 2. Tag match trong brief -> 90 điểm
     matched_tags = [t for t in data.top_tags if t.lower() in brief]
     if matched_tags:
         return 90.0, f"Thường xuyên chia sẻ nội dung về #{matched_tags[0]}, rất khớp với chủ đề chiến dịch."
 
-    # 3. Related cluster
-    creator_cluster = _find_cluster(f"{niche} {cat}")
-    brief_cluster = _find_cluster(brief)
-    if (creator_cluster and creator_cluster == brief_cluster) or (cat not in IGNORED_NICHES and cat in brief):
-        return 75.0, f"Lĩnh vực {niche_info} có tệp khán giả liên quan mật thiết đến sản phẩm của chiến dịch."
+    # 3. Category match trong brief -> 85 điểm
+    if cat not in IGNORED_NICHES and (cat in brief or any(w in brief for w in cat.split() if len(w) > 2)):
+        return 85.0, f"Danh mục {cat} của creator phù hợp trực tiếp với định hướng chiến dịch."
 
-    return 20.0, f"Lĩnh vực {niche_info} có thể giúp mở rộng tiếp cận sang tệp khách hàng tiềm năng mới."
+    # 4. Độ liên quan động dựa trên Semantic Similarity Score từ Vector Search
+    if data.similarity_score >= 0.65:
+        score = round(data.similarity_score * 100.0, 1)
+        return score, f"Lĩnh vực {niche_info} có tệp khán giả liên quan mật thiết đến sản phẩm của chiến dịch."
+
+    if data.similarity_score >= 0.40:
+        score = round(data.similarity_score * 100.0, 1)
+        return score, f"Lĩnh vực {niche_info} có sự tương đồng nhất định với chủ đề chiến dịch."
+
+    # 5. Khác biệt lĩnh vực
+    score = round(max(20.0, data.similarity_score * 100.0), 1)
+    return score, f"Lĩnh vực {niche_info} có thể giúp mở rộng tiếp cận sang tệp khách hàng tiềm năng mới."
 
 
 # ---------------------------------------------------------------------------

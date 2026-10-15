@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.ai.services.embedding_service import embedding_service
+from app.ai.services.explanation_service import ExplanationInput, generate_explanation
 from app.workers.tasks import run_retrain_pipeline
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI"])
@@ -9,6 +10,21 @@ router = APIRouter(prefix="/api/v1/ai", tags=["AI"])
 
 class EmbedRequest(BaseModel):
     text: str
+
+
+class ExplainRequest(BaseModel):
+    creatorName: str = Field(default="", description="Tên hiển thị của creator")
+    followers: int = Field(..., ge=0)
+    engagementRate: float = Field(default=0.0, ge=0.0)
+    niche: str = Field(default="general")
+    category: str = Field(default="Lifestyle")
+    creatorType: str = Field(default="UNKNOWN")
+    avgViews: float = Field(default=0.0, ge=0.0)
+    avgLikes: float = Field(default=0.0, ge=0.0)
+    similarityScore: float = Field(default=0.0, ge=0.0, le=1.0, description="Score từ vector search [0, 1]")
+    campaignBrief: str = Field(default="", description="Mô tả campaign brief")
+    contentSummary: str = Field(default="")
+    topTags: list[str] = Field(default_factory=list)
 
 
 @router.post("/embed")
@@ -28,6 +44,36 @@ async def embed_search_query(req: EmbedRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi sinh vector: {e}")
+
+
+@router.post("/explain")
+async def explain_creator_recommendation(req: ExplainRequest):
+    """
+    Sinh câu giải thích AI tại sao Creator được đề xuất cho Campaign.
+    Trả về: summary, danh sách reasons, và score_breakdown theo từng tiêu chí.
+    """
+    try:
+        data = ExplanationInput(
+            creator_name=req.creatorName,
+            followers=req.followers,
+            engagement_rate=req.engagementRate,
+            niche=req.niche,
+            category=req.category,
+            creator_type=req.creatorType,
+            avg_views=req.avgViews,
+            avg_likes=req.avgLikes,
+            similarity_score=req.similarityScore,
+            campaign_brief=req.campaignBrief,
+            content_summary=req.contentSummary,
+            top_tags=req.topTags,
+        )
+        result = generate_explanation(data)
+        return {
+            "status": "success",
+            **result.to_dict(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi sinh giải thích: {e}")
 
 
 @router.post("/retrain")

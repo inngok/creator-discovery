@@ -262,9 +262,11 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
 
         browser.close()
 
+        cross_links = re.findall(r"https?://[^\s\"'>]+", bio) if bio else []
         creator_info = CreatorInfo(
             platform=Platform.INSTAGRAM,
             externalId=user_pk or username,
+            isStableExternalId=bool(user_pk and user_pk.isdigit()),
             username=f"@{username}",
             displayName=display_name,
             profileUrl=f"https://www.instagram.com/{username}",
@@ -273,6 +275,7 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
             bio=bio,
             publicEmail=public_email,
             publicPhone=public_phone,
+            bioCrossLinks=cross_links,
         )
 
         print(

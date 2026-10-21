@@ -4,7 +4,6 @@ from app.core.models import IngestPayload
 from app.crawlers.facebook_crawler import crawl_facebook_profile
 from app.crawlers.instagram_crawler import crawl_instagram_profile
 from app.crawlers.tiktok_crawler import crawl_tiktok_profile
-from app.crawlers.youtube_crawler import crawl_youtube_channel
 from app.workers.tasks import (
     process_facebook_profile,
     process_instagram_profile,
@@ -12,21 +11,6 @@ from app.workers.tasks import (
 )
 
 router = APIRouter(prefix="/api/v1/crawl", tags=["Crawl"])
-
-
-@router.get("/youtube", response_model=IngestPayload)
-async def crawl_youtube(handle: str):
-    try:
-        profile = await crawl_youtube_channel(handle)
-        if not profile:
-            raise HTTPException(status_code=404, detail="YouTube channel not found")
-        return profile
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to crawl YouTube: {e}")
 
 
 @router.get("/tiktok", response_model=IngestPayload)

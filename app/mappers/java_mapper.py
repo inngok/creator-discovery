@@ -69,6 +69,10 @@ class JavaMapper:
             "category": category,
             "freshnessStatus": "FRESH",
             "dataConfidence": 0.95,
+            "crawlRunId": getattr(result, "crawlRunId", ""),
+            "observedAt": result.observedAt.isoformat() if hasattr(result, "observedAt") and result.observedAt else "",
+            "isStableExternalId": getattr(result.creator, "isStableExternalId", True),
+            "bioCrossLinks": getattr(result.creator, "bioCrossLinks", []),
             "recentPosts": recent_posts_list,
             "embedding": embedding_vector,
         }

@@ -173,11 +173,11 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
 
                     # Trích xuất các bài viết
                     raw_edges = re.findall(
-                        r'\{"node":\{"__typename":"[^"]+","__isXIGPolarisMedia":"[^"]+","pk":"(\d+)","code":"([^"]+)",(?:.*?"caption":\{"text":"([^"]*)")?',
+                        r'\{"node":\{"__typename":"[^"]+","__isXIGPolarisMedia":"[^"]+","pk":"(\d+)","code":"([^"]+)",(?:.*?"caption":\{"text":"((?:[^"\\]|\\.)*)")?',
                         stext,
                     )
                     for edge in raw_edges:
-                        if len(recent_posts) >= 5:
+                        if len(recent_posts) >= 3:
                             break
                         p_pk, p_code, p_caption = edge
                         # Unescape unicode trong caption an toan (bao gom emoji)
@@ -205,7 +205,7 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         if not recent_posts:
             seen_codes = set()
             for a in soup.find_all("a", href=True):
-                if len(recent_posts) >= 5:
+                if len(recent_posts) >= 3:
                     break
                 m = re.search(r"/(?:p|reel)/([A-Za-z0-9_-]+)/", a["href"])
                 if m:
@@ -227,6 +227,38 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
                                 postedAt="",
                             )
                         )
+
+        # 3. Bóc tách chi tiết tương tác (Likes, Comments, Views, Ngày đăng) cho các bài viết
+        for idx, post in enumerate(recent_posts):
+            try:
+                page.goto(post.postUrl, wait_until="domcontentloaded", timeout=12000)
+                p_soup = BeautifulSoup(page.content(), "html.parser")
+                p_meta = p_soup.find("meta", attrs={"property": "og:description"}) or p_soup.find(
+                    "meta", attrs={"name": "description"}
+                )
+                p_desc = p_meta.get("content", "") if p_meta else ""
+
+                l_match = re.search(r"([\d.,]+[KMBkmb]?)\s+likes?", p_desc, re.IGNORECASE)
+                if l_match:
+                    post.likes = parse_instagram_number(l_match.group(1))
+
+                c_match = re.search(r"([\d.,]+[KMBkmb]?)\s+comments?", p_desc, re.IGNORECASE)
+                if c_match:
+                    post.comments = parse_instagram_number(c_match.group(1))
+
+                v_match = re.search(r"([\d.,]+[KMBkmb]?)\s+views?", p_desc, re.IGNORECASE)
+                if v_match:
+                    post.views = parse_instagram_number(v_match.group(1))
+
+                time_tag = p_soup.find("time")
+                if time_tag and time_tag.get("datetime"):
+                    post.postedAt = time_tag.get("datetime")
+                else:
+                    d_match = re.search(r"-\s+.*?on\s+([A-Za-z]+ \d{1,2}, \d{4})", p_desc)
+                    if d_match:
+                        post.postedAt = d_match.group(1)
+            except Exception as post_err:
+                print(f"[Instagram] Khong the lay chi tiet bai viet {post.platformPostId}: {post_err}")
 
         browser.close()
 

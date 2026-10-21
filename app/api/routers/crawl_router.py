@@ -5,7 +5,11 @@ from app.crawlers.facebook_crawler import crawl_facebook_profile
 from app.crawlers.instagram_crawler import crawl_instagram_profile
 from app.crawlers.tiktok_crawler import crawl_tiktok_profile
 from app.crawlers.youtube_crawler import crawl_youtube_channel
-from app.workers.tasks import process_facebook_profile, process_tiktok_profile
+from app.workers.tasks import (
+    process_facebook_profile,
+    process_instagram_profile,
+    process_tiktok_profile,
+)
 
 router = APIRouter(prefix="/api/v1/crawl", tags=["Crawl"])
 
@@ -97,3 +101,15 @@ async def crawl_instagram(username: str):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to crawl Instagram: {e}")
+
+
+@router.post("/instagram/enqueue", summary="Đưa Creator Instagram vào hàng đợi Celery")
+async def enqueue_instagram(username: str) -> dict:
+    try:
+        process_instagram_profile.delay(username)
+        return {
+            "status": "success",
+            "message": f"Đã đưa @{username} vào hàng đợi Celery Instagram! Hệ thống sẽ cào và gửi sang Java tự động.",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

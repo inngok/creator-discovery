@@ -7,3 +7,4 @@ chrome_profile/
 server.log
 service_pids.txt
 ai_result.json
+.idea/

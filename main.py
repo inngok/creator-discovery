@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="InfluencerMatch Crawler API",
-    description="API for crawling and normalizing Creator data from YouTube and TikTok.",
+    description="API for crawling and normalizing Creator data from YouTube, TikTok, Facebook and Instagram.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -45,4 +45,3 @@ app.include_router(ai_router.router)
 if __name__ == "__main__":
     # Reload with BKAI embed endpoint
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-

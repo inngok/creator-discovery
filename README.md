@@ -61,10 +61,15 @@ Sau khi khởi động server, truy cập Swagger UI trên trình duyệt:
 👉 **[http://localhost:8000/docs](http://localhost:8000/docs)**
 
 Các endpoint chính:
+- `GET /api/v1/crawl/instagram?username={username}`: Cào trực tiếp profile Instagram (Playwright Stealth, trả về raw data).
+- `POST /api/v1/crawl/instagram/enqueue?username={username}`: Đưa vào hàng đợi Celery cào ngầm + AI phân tích riêng + gửi sang Java backend.
 - `GET /api/v1/crawl/tiktok?username={username}`: Cào dữ liệu TikTok trực tiếp.
 - `POST /api/v1/crawl/tiktok/enqueue?username={username}`: Đưa vào hàng đợi Celery cào ngầm + AI.
-- `GET /api/v1/crawl/facebook?username={username}`: Cào fanpage/profile Facebook (Playwright Stealth + AI).
+- `GET /api/v1/crawl/facebook?username={username}`: Cào fanpage/profile Facebook.
+- `POST /api/v1/crawl/facebook/enqueue?username={username}`: Đưa vào hàng đợi Celery cào ngầm Facebook + AI.
 - `GET /api/v1/crawl/youtube?channel_id={id}`: Cào kênh YouTube qua API.
+- `POST /api/v1/ai/enrich`: Phân tích AI độc lập cho Creator (Category, Niche, Type, Sentiment).
+- `POST /api/v1/ai/embed`: Trích xuất vector 768 chiều (BKAI Bi-Encoder) phục vụ Semantic Search.
 
 ---
 

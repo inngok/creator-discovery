@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.ai.analyzer import process_ai_enrichment
 from app.ai.services.embedding_service import embedding_service
 from app.ai.services.explanation_service import ExplanationInput, generate_explanation
+from app.core.models import IngestPayload
 from app.workers.tasks import run_retrain_pipeline
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI"])
@@ -88,3 +90,22 @@ async def trigger_ai_retrain():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/enrich",
+    response_model=IngestPayload,
+    summary="Phân tích AI độc lập cho dữ liệu Creator đã cào",
+)
+async def enrich_creator_ai(payload: IngestPayload):
+    """
+    Nhận dữ liệu thô (CreatorInfo + Posts) từ bất kỳ platform nào (Instagram, TikTok, FB,...)
+    và chạy phân loại ngành nghề (Category), Niche, Creator Type và Sentiment qua AI.
+    """
+    try:
+        enrichment = process_ai_enrichment(payload.creator, payload.recentPosts)
+        payload.aiEnrichment = enrichment
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi phân tích AI: {e}")
+

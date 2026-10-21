@@ -184,9 +184,14 @@ def _extract_user_info_from_dom(page: Page, username: str, url: str) -> CreatorI
     )
     public_phone = phone_match.group(0) if phone_match else None
 
+    cross_links = re.findall(r"https?://[^\s\"'>]+", full_bio) if full_bio else []
+    if bio_link and bio_link not in cross_links:
+        cross_links.append(bio_link)
+
     return CreatorInfo(
         platform=Platform.TIKTOK,
         externalId=external_id,
+        isStableExternalId=True,  # TikTok authorId là dãy số cố định không bao giờ đổi
         username=f"@{username}",
         displayName=user_info.get("nickname", username),
         profileUrl=url,
@@ -195,6 +200,7 @@ def _extract_user_info_from_dom(page: Page, username: str, url: str) -> CreatorI
         bio=full_bio,
         publicEmail=public_email,
         publicPhone=public_phone,
+        bioCrossLinks=cross_links,
     )
 
 

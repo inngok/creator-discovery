@@ -271,9 +271,13 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
 
             avatar_url = og_image.get("content") if og_image else None
 
+            # Trích xuất các liên kết mạng xã hội khác trong bio (nếu có)
+            cross_links = re.findall(r"https?://[^\s\"'>]+", clean_bio) if clean_bio else []
+
             creator_info = CreatorInfo(
                 platform=Platform.FACEBOOK,
                 externalId=clean_slug,
+                isStableExternalId=clean_slug.isdigit(),  # False nếu là slug chữ vì FB slug có thể đổi, True nếu là số UID
                 username=clean_slug,
                 displayName=display_name,
                 profileUrl=url,
@@ -282,6 +286,7 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
                 bio=clean_bio,
                 publicEmail=public_email,
                 publicPhone=public_phone,
+                bioCrossLinks=cross_links,
             )
 
             # Lưu lại trạng thái trình duyệt

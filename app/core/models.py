@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from enum import Enum
+import uuid
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +15,7 @@ class Platform(str, Enum):
 class CreatorInfo(BaseModel):
     platform: Platform
     externalId: str = Field(..., description="ID gốc từ platform cấp, NOT NULL")
+    isStableExternalId: bool = True  # Facebook slug = False, TikTok/YouTube = True
     username: str = Field(..., description="handle account, NOT NULL")
     displayName: str = Field(..., description="NOT NULL")
     profileUrl: str = Field(..., description="NOT NULL")
@@ -24,6 +26,7 @@ class CreatorInfo(BaseModel):
     # Optional commercial contact info (extra fields not in example but useful)
     publicEmail: str | None = None
     publicPhone: str | None = None
+    bioCrossLinks: list[str] = Field(default_factory=list)
 
 
 class Post(BaseModel):
@@ -52,6 +55,8 @@ class IngestPayload(BaseModel):
     recentPosts: list[Post] = Field(default_factory=list)
     aiEnrichment: AIEnrichment | None = None
     source: str
+    crawlRunId: str = Field(default_factory=lambda: f"CR-{uuid.uuid4().hex[:12].upper()}")
+    observedAt: datetime = Field(default_factory=lambda: datetime.now(UTC))
     collectedAt: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property

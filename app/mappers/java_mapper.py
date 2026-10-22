@@ -30,7 +30,11 @@ class JavaMapper:
         )
         niche = result.aiEnrichment.niche if result.aiEnrichment else "General"
         category = result.aiEnrichment.category if result.aiEnrichment else "Lifestyle"
-        content_summary = result.creator.bio or "Creator"
+        content_summary = (
+            result.aiEnrichment.contentSummary
+            if result.aiEnrichment and getattr(result.aiEnrichment, "contentSummary", None)
+            else (result.creator.bio or "Creator")
+        )
 
         # 1. Ghép đoạn text ngữ cảnh để mô hình BKAI Bi-Encoder hiểu sâu nhất
         text_parts = [
@@ -70,7 +74,7 @@ class JavaMapper:
             "freshnessStatus": "FRESH",
             "dataConfidence": 0.95,
             "crawlRunId": getattr(result, "crawlRunId", ""),
-            "observedAt": result.observedAt.isoformat() if hasattr(result, "observedAt") and result.observedAt else "",
+            "observedAt": result.observedAt.strftime("%Y-%m-%dT%H:%M:%S") if hasattr(result, "observedAt") and result.observedAt else None,
             "isStableExternalId": getattr(result.creator, "isStableExternalId", True),
             "bioCrossLinks": getattr(result.creator, "bioCrossLinks", []),
             "recentPosts": recent_posts_list,

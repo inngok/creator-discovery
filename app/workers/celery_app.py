@@ -20,6 +20,13 @@ app.conf.update(
     worker_concurrency=1,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    task_routes={
+        "app.workers.tasks.preflight_candidate_task": {"queue": "preflight_queue"},
+        "app.workers.tasks.process_tiktok_profile": {"queue": "deep_crawl_queue"},
+        "app.workers.tasks.process_facebook_profile": {"queue": "deep_crawl_queue"},
+        "app.workers.tasks.process_instagram_profile": {"queue": "deep_crawl_queue"},
+        "app.workers.tasks.run_retrain_pipeline": {"queue": "default"},
+    },
 )
 
 from celery.schedules import crontab

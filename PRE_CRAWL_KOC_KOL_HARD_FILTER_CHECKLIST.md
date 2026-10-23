@@ -226,7 +226,7 @@
 
 *Mục tiêu: Đưa Preflight vào Celery Task nhẹ, lắp chốt chặn (Gate) ở toàn bộ các cửa ngõ kích hoạt Deep Crawl, đảm bảo chỉ có tài khoản đã được phê duyệt mới được cấp tài nguyên cào sâu.*
 
-- [ ] **3.1. Tạo Celery Preflight Task**
+- [x] **3.1. Tạo Celery Preflight Task**
   - **File:** `app/workers/tasks.py`
   - **Nhiệm vụ:**
     - Định nghĩa `@app.task(bind=True, max_retries=2, queue="preflight_queue")`:
@@ -238,9 +238,9 @@
       - Nếu `decision in [AUTO_ACCEPT_KOC, AUTO_ACCEPT_KOL]`: Tự động enqueue `process_tiktok_profile.delay(username)`.
       - Nếu `decision == NEEDS_MANAGER_REVIEW`: Đánh dấu chờ Data Manager, **không kích hoạt Deep Crawl**.
       - Nếu `decision == AUTO_REJECT`: Ghi log, **dừng luồng ngay lập tức**.
-  - **Tiêu chí nghiệm thu:** Phân tách rõ ràng giữa hàng đợi Preflight nhẹ và hàng đợi Deep Crawl nặng.
+  - **Tiêu chí nghiệm thu:** Phân tách rõ ràng giữa hàng đợi Preflight nhẹ và hàng đợi Deep Crawl nặng. (Đã hoàn thành)
 
-- [ ] **3.2. Cài đặt Celery Deep Crawl Gate tại Worker (Worker-Side Guard)**
+- [x] **3.2. Cài đặt Celery Deep Crawl Gate tại Worker (Worker-Side Guard)**
   - **File:** `app/workers/tasks.py`
   - **Nhiệm vụ:**
     - Đặt chốt chặn ngay dòng đầu tiên của `process_tiktok_profile(self, username)`:
@@ -252,49 +252,49 @@
               logger.error(f"[GATE BLOCKED] Từ chối Deep Crawl {username}: Chưa qua Preflight hoặc chưa được duyệt!")
               return {"status": "BLOCKED", "reason": "UNAUTHORIZED_DEEP_CRAWL"}
       ```
-  - **Tiêu chí nghiệm thu:** Bất kỳ lệnh gọi trực tiếp nào bỏ qua Preflight đều bị chặn đứng ngay lập tức tại Worker.
+  - **Tiêu chí nghiệm thu:** Bất kỳ lệnh gọi trực tiếp nào bỏ qua Preflight đều bị chặn đứng ngay lập tức tại Worker. (Đã hoàn thành)
 
-- [ ] **3.3. Tái cấu trúc `discovery_bot.py` (Dispatcher-Side Guard)**
+- [x] **3.3. Tái cấu trúc `discovery_bot.py` (Dispatcher-Side Guard)**
   - **File:** `app/scripts/discovery_bot.py`
   - **Nhiệm vụ:**
     - Thay thế toàn bộ lệnh gọi cũ:
       - ❌ `process_tiktok_profile.delay(username)`
       - ✅ `preflight_candidate_task.delay("TIKTOK", username)`
     - Tích hợp bộ lọc Nấc 0: Bóc tách follower và bio từ thẻ tìm kiếm trước khi enqueue.
-  - **Tiêu chí nghiệm thu:** Bot quét hàng ngàn kết quả nhưng chỉ đưa vào Preflight các tài khoản triển vọng, không bao giờ gọi Deep Crawl trực tiếp.
+  - **Tiêu chí nghiệm thu:** Bot quét hàng ngàn kết quả nhưng chỉ đưa vào Preflight các tài khoản triển vọng, không bao giờ gọi Deep Crawl trực tiếp. (Đã hoàn thành)
 
-- [ ] **3.4. Bảo vệ API Enqueue trong `crawl_router.py`**
+- [x] **3.4. Bảo vệ API Enqueue trong `crawl_router.py`**
   - **File:** `app/api/routers/crawl_router.py`
   - **Nhiệm vụ:**
     - Chỉnh sửa các endpoint:
       - `/api/v1/crawl/tiktok/enqueue`: Chuyển sang gọi `preflight_candidate_task.delay("TIKTOK", username)`.
       - Bổ sung tham số kiểm soát quyền nếu muốn ép buộc cào sâu (`force_deep_crawl=False` yêu cầu quyền Admin/Manager).
       - Đồng bộ tương tự cho Facebook và Instagram enqueue endpoints.
-  - **Tiêu chí nghiệm thu:** Người dùng hoặc hệ thống ngoài gọi API enqueue đều phải đi qua cổng Preflight Gate.
+  - **Tiêu chí nghiệm thu:** Người dùng hoặc hệ thống ngoài gọi API enqueue đều phải đi qua cổng Preflight Gate. (Đã hoàn thành)
 
-- [ ] **3.5. Bảo vệ Batch/Excel Import trong `import_and_crawl_excel.py`**
+- [x] **3.5. Bảo vệ Batch/Excel Import trong `import_and_crawl_excel.py`**
   - **File:** `app/scripts/import_and_crawl_excel.py`
   - **Nhiệm vụ:**
     - Sửa luồng `mode == 'crawl'`: Không đẩy trực tiếp vào `process_tiktok_profile.delay(username)`.
     - Chuyển sang đẩy qua `preflight_candidate_task.delay("TIKTOK", username)`.
-  - **Tiêu chí nghiệm thu:** File Excel chứa hàng trăm link thương mại hoặc shop không làm sập hàng đợi Deep Crawl.
+  - **Tiêu chí nghiệm thu:** File Excel chứa hàng trăm link thương mại hoặc shop không làm sập hàng đợi Deep Crawl. (Đã hoàn thành)
 
-- [ ] **3.6. Cấu hình định tuyến Queue trong Celery App**
+- [x] **3.6. Cấu hình định tuyến Queue trong Celery App**
   - **File:** `app/workers/celery_app.py`
   - **Nhiệm vụ:**
     - Cấu hình tách 2 hàng đợi:
       - `preflight_queue`: Dành cho tác vụ kiểm tra nhanh (concurrency cao hơn, ví dụ 2–4 workers).
       - `deep_crawl_queue`: Dành cho tác vụ cào sâu Playwright nặng (concurrency thấp = 1 để tránh nghẽn RAM và chống block IP).
-  - **Tiêu chí nghiệm thu:** Tác vụ Deep Crawl nặng không làm tắc nghẽn hàng đợi kiểm tra Preflight.
+  - **Tiêu chí nghiệm thu:** Tác vụ Deep Crawl nặng không làm tắc nghẽn hàng đợi kiểm tra Preflight. (Đã hoàn thành)
 
-- [ ] **3.7. Viết Integration Tests cho Phase 3 (TC14 – TC16, TC20)**
+- [x] **3.7. Viết Integration Tests cho Phase 3 (TC14 – TC16, TC20)**
   - **File:** `tests/test_celery_gates.py`
   - **Nhiệm vụ:**
     - `TC14`: Candidate `AUTO_REJECT` $\rightarrow$ Xác nhận không có Deep Crawl Task nào được tạo.
     - `TC15`: Candidate `NEEDS_MANAGER_REVIEW` chưa duyệt $\rightarrow$ Không kích hoạt Deep Crawl.
     - `TC16`: Data Manager bấm APPROVE $\rightarrow$ Kích hoạt duy nhất 1 Deep Crawl Task.
     - `TC20`: Thử gọi trực tiếp `process_tiktok_profile.delay(unauthorized_user)` $\rightarrow$ Bị chặn ngay dòng đầu với mã `BLOCKED`.
-  - **Tiêu chí nghiệm thu:** Bộ test chạy pass 100%, bảo vệ tuyệt đối tất cả các cửa ngõ.
+  - **Tiêu chí nghiệm thu:** Bộ test chạy pass 100%, bảo vệ tuyệt đối tất cả các cửa ngõ. (Đã hoàn thành)
 
 ---
 

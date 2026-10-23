@@ -3,10 +3,13 @@ import time
 
 sys.stdout.reconfigure(encoding="utf-8")
 import undetected_chromedriver as uc
-from bs4 import BeautifulSoup
 
 from app.core.logger import setup_logger
-from app.workers.tasks import process_tiktok_profile
+from app.crawlers.search_extractor import (
+    evaluate_tier0_search_card,
+    extract_search_card_candidates,
+)
+from app.workers.tasks import preflight_candidate_task
 
 logger = setup_logger(__name__)
 
@@ -36,6 +39,8 @@ def discover_creators_by_keyword(keyword: str):
         time.sleep(7)
 
         usernames = set()
+        enqueued_count = 0
+        dropped_count = 0
 
         # Scroll a few times to discover creators
         for i in range(5):
@@ -44,23 +49,36 @@ def discover_creators_by_keyword(keyword: str):
             time.sleep(3)
 
             html = driver.page_source
-            soup = BeautifulSoup(html, "html.parser")
+            candidates = extract_search_card_candidates(html)
 
-            # Find all profile links
-            a_tags = soup.find_all("a")
-            for a in a_tags:
-                href = a.get("href", "")
-                if href.startswith("/@"):
-                    # Example: /@_xusothankinh?lang=en -> _xusothankinh
-                    username = href.split("?")[0].replace("/@", "").strip()
-                    if username and username not in usernames:
-                        usernames.add(username)
-                        logger.info(f"[DISCOVERY] Found creator: {username}")
+            for cand in candidates:
+                username = cand["username"]
+                if not username or username in usernames:
+                    continue
+                usernames.add(username)
 
-                        # 🚀 Push to Redis Queue for Celery workers to pick up
-                        process_tiktok_profile.delay(username)
+                # Nấc 0: Zero-cost Pre-filter ngay tại thẻ tìm kiếm
+                pass_tier0, drop_reason = evaluate_tier0_search_card(cand)
+                if not pass_tier0:
+                    dropped_count += 1
+                    logger.info(
+                        f"[DISCOVERY TIER-0 DROP] Bỏ qua @{username} "
+                        f"({cand.get('followers', 0)} fl, '{cand.get('bio_snippet', '')}'): {drop_reason}"
+                    )
+                    continue
 
-        logger.info(f"[DISCOVERY] Completed! Sent {len(usernames)} tasks to the Queue.")
+                # 🚀 Gửi vào hàng đợi Preflight nhẹ, KHÔNG BAO GIỜ gọi Deep Crawl trực tiếp
+                preflight_candidate_task.delay("TIKTOK", username)
+                enqueued_count += 1
+                logger.info(
+                    f"[DISCOVERY ENQUEUE PREFLIGHT] Đã đưa @{username} vào Preflight Queue "
+                    f"({cand.get('followers', 0)} fl)"
+                )
+
+        logger.info(
+            f"[DISCOVERY] Completed! Found {len(usernames)} candidates: "
+            f"{enqueued_count} sent to Preflight Queue, {dropped_count} dropped by Tier-0."
+        )
     except Exception as e:
         logger.info(f"[DISCOVERY] Error: {e}")
     finally:

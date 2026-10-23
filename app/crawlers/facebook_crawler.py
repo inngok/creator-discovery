@@ -277,7 +277,7 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
             creator_info = CreatorInfo(
                 platform=Platform.FACEBOOK,
                 externalId=clean_slug,
-                isStableExternalId=clean_slug.isdigit(),  # False nếu là slug chữ vì FB slug có thể đổi, True nếu là số UID
+                isStableExternalId=False,  # False nếu là slug chữ vì FB slug có thể đổi, True nếu là số UID
                 username=clean_slug,
                 displayName=display_name,
                 profileUrl=url,

@@ -42,6 +42,20 @@ def process_tiktok_profile(self, username: str) -> Optional[dict]:
                 f"[WORKER] SUCCESS: {username} - {result.creator.followers} Followers. Type: {getattr(result.aiEnrichment, 'creatorType', 'UNKNOWN')}, Niche: {safe_category}"
             )
 
+            creator_type = (
+                getattr(result.aiEnrichment, "creatorType", "UNKNOWN")
+                if result.aiEnrichment
+                else "UNKNOWN"
+            )
+
+            # LỌC DATA RÁC: CHỈ LƯU DUY NHẤT KOL VÀ KOC
+            # Loại bỏ hoàn toàn BRAND (shop bán hàng, cơ quan, đài TH), USER (cá nhân) và UNKNOWN
+            if creator_type not in ["KOL", "KOC"]:
+                logger.warning(
+                    f"[WORKER] SKIP INGEST {username}: Bỏ qua vì không phải KOL/KOC (Phân loại: {creator_type})."
+                )
+                return result.model_dump(mode="json")
+
             java_payload = JavaMapper.from_ingest_payload(result)
 
             # Lưu tạm payload sẽ gửi cho Java Backend ra file để User dễ kiểm tra
@@ -84,6 +98,20 @@ def process_facebook_profile(self, username: str) -> Optional[dict]:
             logger.info(
                 f"[WORKER] SUCCESS FB: {username} - {result.creator.followers} Followers. Type: {getattr(result.aiEnrichment, 'creatorType', 'UNKNOWN')}, Niche: {safe_category}"
             )
+
+            creator_type = (
+                getattr(result.aiEnrichment, "creatorType", "UNKNOWN")
+                if result.aiEnrichment
+                else "UNKNOWN"
+            )
+
+            # LỌC DATA RÁC: CHỈ LƯU DUY NHẤT KOL VÀ KOC
+            # Loại bỏ hoàn toàn BRAND (shop bán hàng, cơ quan, đài TH), USER (cá nhân) và UNKNOWN
+            if creator_type not in ["KOL", "KOC"]:
+                logger.warning(
+                    f"[WORKER] SKIP INGEST {username}: Bỏ qua vì không phải KOL/KOC (Phân loại: {creator_type})."
+                )
+                return result.model_dump(mode="json")
 
             java_payload = JavaMapper.from_ingest_payload(result)
 
@@ -128,6 +156,20 @@ def process_instagram_profile(self, username: str) -> Optional[dict]:
             logger.info(
                 f"[WORKER] SUCCESS IG: {username} - {result.creator.followers} Followers. Type: {getattr(result.aiEnrichment, 'creatorType', 'UNKNOWN')}, Niche: {safe_category}"
             )
+
+            creator_type = (
+                getattr(result.aiEnrichment, "creatorType", "UNKNOWN")
+                if result.aiEnrichment
+                else "UNKNOWN"
+            )
+
+            # LỌC DATA RÁC: CHỈ LƯU DUY NHẤT KOL VÀ KOC
+            # Loại bỏ hoàn toàn BRAND (shop bán hàng, cơ quan, đài TH), USER (cá nhân) và UNKNOWN
+            if creator_type not in ["KOL", "KOC"]:
+                logger.warning(
+                    f"[WORKER] SKIP INGEST {username}: Bỏ qua vì không phải KOL/KOC (Phân loại: {creator_type})."
+                )
+                return result.model_dump(mode="json")
 
             java_payload = JavaMapper.from_ingest_payload(result)
 

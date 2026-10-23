@@ -192,14 +192,55 @@ class CandidateStagingRepository:
             cursor.execute(query, params)
             conn.commit()
 
-    def list_by_decision(self, decision: Decision, limit: int = 50) -> list[CandidateStagingRecord]:
-        dec_val = decision.value if hasattr(decision, "value") else str(decision)
+    def get_candidate_by_id(self, candidate_id: str) -> CandidateStagingRecord | None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT * FROM candidate_staging WHERE decision = ? ORDER BY updated_at DESC LIMIT ?",
-                (dec_val, limit)
+                "SELECT * FROM candidate_staging WHERE id = ?",
+                (candidate_id,)
             )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_record(row)
+
+    def count_by_decision(self, decision: Decision, platform: str | None = None) -> int:
+        dec_val = decision.value if hasattr(decision, "value") else str(decision)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if platform:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM candidate_staging WHERE decision = ? AND platform = ?",
+                    (dec_val, platform.upper())
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM candidate_staging WHERE decision = ?",
+                    (dec_val,)
+                )
+            row = cursor.fetchone()
+            return row[0] if row else 0
+
+    def list_by_decision(
+        self,
+        decision: Decision,
+        platform: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[CandidateStagingRecord]:
+        dec_val = decision.value if hasattr(decision, "value") else str(decision)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if platform:
+                cursor.execute(
+                    "SELECT * FROM candidate_staging WHERE decision = ? AND platform = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                    (dec_val, platform.upper(), limit, offset)
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM candidate_staging WHERE decision = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                    (dec_val, limit, offset)
+                )
             rows = cursor.fetchall()
             return [self._row_to_record(r) for r in rows]
 

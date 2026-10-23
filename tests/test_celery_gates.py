@@ -22,7 +22,14 @@ class TestCeleryGatesAndPipeline(unittest.TestCase):
     """
 
     def setUp(self):
-        pass
+        self.emb_patcher = patch(
+            "app.mappers.java_mapper.embedding_service.get_search_embedding",
+            return_value=[0.05] * 768,
+        )
+        self.mock_emb = self.emb_patcher.start()
+
+    def tearDown(self):
+        self.emb_patcher.stop()
 
     @patch("app.workers.tasks.process_tiktok_profile.apply_async")
     @patch("app.services.preflight_service.preflight_service.run_preflight")
@@ -127,12 +134,14 @@ class TestCeleryGatesAndPipeline(unittest.TestCase):
 
         # 4. Khi Worker Deep Crawl nhận task này, Gate phải mở (không bị BLOCKED)
         with patch("app.workers.tasks._crawl_tiktok_profile_sync") as mock_crawl_sync, \
+             patch("app.workers.tasks.validate_post_crawl") as mock_val, \
              patch("app.workers.tasks.process_ai_enrichment") as mock_ai, \
              patch("app.workers.tasks.java_client.send_creator_data") as mock_send_java, \
              patch("app.workers.tasks.JavaMapper.from_ingest_payload") as mock_mapper:
 
+            mock_val.return_value = MagicMock(is_valid=True)
             mock_payload = MagicMock()
-            mock_payload.creator = MagicMock()
+            mock_payload.creator = MagicMock(username=username, followers=15000, externalId="uid_16")
             mock_payload.recentPosts = []
             mock_payload.aiEnrichment = MagicMock(creatorType="KOC")
             mock_payload.model_dump.return_value = {"creator": username, "status": "CRAWLED"}

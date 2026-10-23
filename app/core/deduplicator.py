@@ -16,7 +16,7 @@ _IN_MEMORY_LOCKS: dict[str, datetime] = {}
 
 def get_redis_client() -> redis.Redis | None:
     try:
-        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=2.0)
+        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=0.5, socket_connect_timeout=0.5)
         r.ping()
         return r
     except Exception as e:

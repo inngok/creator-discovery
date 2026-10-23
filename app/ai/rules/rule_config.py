@@ -130,3 +130,8 @@ KOL_INFLUENCE_PHRASES = [
     "hướng dẫn", "phân tích chuyên sâu"
 ]
 REGEX_KOL_INFLUENCE = build_boundary_regex(KOL_INFLUENCE_PHRASES)
+
+# Aliases cho các module sử dụng
+REGEX_COMMERCIAL_POST = REGEX_SPAM_CATALOG
+REGEX_OPINION_KEYWORDS = REGEX_KOC_OPINION
+

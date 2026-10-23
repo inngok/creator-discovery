@@ -77,6 +77,10 @@ class JavaMapper:
             "observedAt": result.observedAt.strftime("%Y-%m-%dT%H:%M:%S") if hasattr(result, "observedAt") and result.observedAt else None,
             "isStableExternalId": getattr(result.creator, "isStableExternalId", True),
             "bioCrossLinks": getattr(result.creator, "bioCrossLinks", []),
+            "sourceType": "PUBLIC",
+            "source_type": "PUBLIC",
+            "masterId": None,
+            "master_id": None,
             "recentPosts": recent_posts_list,
             "embedding": embedding_vector,
         }

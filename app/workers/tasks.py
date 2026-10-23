@@ -2,6 +2,7 @@ import json
 from typing import Optional
 
 from app.ai.analyzer import process_ai_enrichment
+from app.ai.rules.post_validator import validate_post_crawl
 from app.ai.rules.rule_config import Decision, ProcessingStatus
 from app.clients.java_client import java_client
 from app.core.candidate_staging import staging_repo
@@ -125,6 +126,27 @@ def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Opt
         result = _crawl_tiktok_profile_sync(clean_user)
 
         if result:
+            # 🛡️ POST-CRAWL VALIDATION GUARD
+            post_val = validate_post_crawl(result, is_refresh=is_refresh)
+            if not post_val.is_valid:
+                logger.warning(
+                    f"[WORKER] QUARANTINE @{clean_user}: Không đạt Post-Validation Guard "
+                    f"(Lý do: {post_val.quarantine_reason}, Chi tiết: {post_val.details})"
+                )
+                staging_repo.update_status_and_decision(
+                    platform="TIKTOK",
+                    username=clean_user,
+                    status=ProcessingStatus.FAILED,
+                    decision=Decision.AUTO_REJECT,
+                    reason_codes=[post_val.quarantine_reason or "QUARANTINE_POST_VALIDATION_FAILED"],
+                )
+                return {
+                    "status": "QUARANTINE_REJECTED",
+                    "reason": post_val.quarantine_reason,
+                    "details": post_val.details,
+                    "username": clean_user,
+                }
+
             # Chạy AI ở background worker
             result.aiEnrichment = process_ai_enrichment(
                 result.creator, result.recentPosts
@@ -218,6 +240,27 @@ def process_facebook_profile(self, username: str, is_refresh: bool = False) -> O
         result = _crawl_facebook_profile_sync(clean_user)
 
         if result:
+            # 🛡️ POST-CRAWL VALIDATION GUARD
+            post_val = validate_post_crawl(result, is_refresh=is_refresh)
+            if not post_val.is_valid:
+                logger.warning(
+                    f"[WORKER] QUARANTINE FB {clean_user}: Không đạt Post-Validation Guard "
+                    f"(Lý do: {post_val.quarantine_reason}, Chi tiết: {post_val.details})"
+                )
+                staging_repo.update_status_and_decision(
+                    platform="FACEBOOK",
+                    username=clean_user,
+                    status=ProcessingStatus.FAILED,
+                    decision=Decision.AUTO_REJECT,
+                    reason_codes=[post_val.quarantine_reason or "QUARANTINE_POST_VALIDATION_FAILED"],
+                )
+                return {
+                    "status": "QUARANTINE_REJECTED",
+                    "reason": post_val.quarantine_reason,
+                    "details": post_val.details,
+                    "username": clean_user,
+                }
+
             result.aiEnrichment = process_ai_enrichment(
                 result.creator, result.recentPosts
             )
@@ -307,6 +350,27 @@ def process_instagram_profile(self, username: str, is_refresh: bool = False) -> 
         result = _crawl_instagram_profile_sync(clean_user)
 
         if result:
+            # 🛡️ POST-CRAWL VALIDATION GUARD
+            post_val = validate_post_crawl(result, is_refresh=is_refresh)
+            if not post_val.is_valid:
+                logger.warning(
+                    f"[WORKER] QUARANTINE IG @{clean_user}: Không đạt Post-Validation Guard "
+                    f"(Lý do: {post_val.quarantine_reason}, Chi tiết: {post_val.details})"
+                )
+                staging_repo.update_status_and_decision(
+                    platform="INSTAGRAM",
+                    username=clean_user,
+                    status=ProcessingStatus.FAILED,
+                    decision=Decision.AUTO_REJECT,
+                    reason_codes=[post_val.quarantine_reason or "QUARANTINE_POST_VALIDATION_FAILED"],
+                )
+                return {
+                    "status": "QUARANTINE_REJECTED",
+                    "reason": post_val.quarantine_reason,
+                    "details": post_val.details,
+                    "username": clean_user,
+                }
+
             result.aiEnrichment = process_ai_enrichment(
                 result.creator, result.recentPosts
             )

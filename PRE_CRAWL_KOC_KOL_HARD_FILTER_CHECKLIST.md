@@ -302,7 +302,7 @@
 
 *Mục tiêu: Đảm bảo dữ liệu sau khi cào sâu được xác thực lại tính nhất quán, kết nối hàng đợi duyệt cho Data Manager và gửi dữ liệu sạch sang Java Backend qua HTTP an toàn.*
 
-- [ ] **4.1. Bộ thẩm định sau cào sâu (Post-Crawl Validation Guard)**
+- [x] **4.1. Bộ thẩm định sau cào sâu (Post-Crawl Validation Guard)**
   - **File:** `app/ai/rules/post_validator.py`
   - **Nhiệm vụ:**
     - Sau khi Full Playwright Crawl hoàn tất (đã lấy 5–10 bài viết đầy đủ số liệu):
@@ -310,9 +310,9 @@
       - Kiểm tra chất lượng dữ liệu bài viết: Có ít nhất 3 bài có nội dung caption và metrics hợp lệ không?
       - Kiểm tra mâu thuẫn thực thể: Liệu 10 bài vừa cào có bộc lộ rõ ràng tài khoản là shop bán hàng chuyên nghiệp (catalog) mà bước Preflight chưa thấy không?
     - Nếu vi phạm $\rightarrow$ Đánh dấu `QUARANTINE_POST_VALIDATION_FAILED`, dừng gửi sang Java Backend.
-  - **Tiêu chí nghiệm thu:** Ngăn chặn các ca "lọt lưới" do Preflight bị thiếu bài viết.
+  - **Tiêu chí nghiệm thu:** Ngăn chặn các ca "lọt lưới" do Preflight bị thiếu bài viết. (Đã hoàn thành)
 
-- [ ] **4.2. API / Interface phục vụ Selective Data Manager Review**
+- [x] **4.2. API / Interface phục vụ Selective Data Manager Review**
   - **File:** `app/api/routers/review_router.py` (hoặc tích hợp trong `ai_router.py`)
   - **Nhiệm vụ:**
     - Endpoint `GET /api/v1/candidates/review/pending`:
@@ -322,9 +322,9 @@
       - Nếu `APPROVE_*`: Cập nhật trạng thái `MANAGER_APPROVED` và tự động kích hoạt `process_tiktok_profile.delay(username)`.
       - Nếu `REJECT`: Cập nhật `MANAGER_REJECTED`, ghi nhận lý do từ chối.
       - Ghi Audit Log người duyệt và thời gian duyệt.
-  - **Tiêu chí nghiệm thu:** Data Manager chỉ phải duyệt các ca thực sự có tiềm năng và thao tác phê duyệt kích hoạt Deep Crawl tự động.
+  - **Tiêu chí nghiệm thu:** Data Manager chỉ phải duyệt các ca thực sự có tiềm năng và thao tác phê duyệt kích hoạt Deep Crawl tự động. (Đã hoàn thành)
 
-- [ ] **4.3. Đảm bảo an toàn Ingestion sang SEP_BE (JavaClient Guard)**
+- [x] **4.3. Đảm bảo an toàn Ingestion sang SEP_BE (JavaClient Guard)**
   - **File:** `app/workers/tasks.py` & `app/clients/java_client.py`
   - **Nhiệm vụ:**
     - Chỉ cho phép gọi `java_client.send_creator_data(java_payload)` khi:
@@ -332,25 +332,25 @@
       2. `creatorType` nằm trong danh sách `["KOL", "KOC"]`.
       3. Payload có đầy đủ `embedding` vector 768 chiều và `contentSummary` sạch.
     - Cập nhật trạng thái trong staging: `processing_status = INGESTED`.
-  - **Tiêu chí nghiệm thu:** Chỉ dữ liệu sạch và đạt chuẩn mới được bắn sang Java Backend.
+  - **Tiêu chí nghiệm thu:** Chỉ dữ liệu sạch và đạt chuẩn mới được bắn sang Java Backend. (Đã hoàn thành)
 
-- [ ] **4.4. Bảo toàn nguyên tắc Creator Master Identity**
+- [x] **4.4. Bảo toàn nguyên tắc Creator Master Identity**
   - **File:** `app/mappers/java_mapper.py`
   - **Nhiệm vụ:**
     - Đảm bảo payload gửi sang Java luôn mang thuộc tính:
       - `source_type = 'PUBLIC'`
       - `master_id = None`
     - Tuyệt đối không can thiệp, không gán, không tự tạo `creator_master` trong suốt quá trình Background Crawling (bảo vệ trọn vẹn luồng Claim/OAuth bên Java).
-  - **Tiêu chí nghiệm thu:** Không phá vỡ kiến trúc Master Profile và quyền sở hữu Creator đã định nghĩa.
+  - **Tiêu chí nghiệm thu:** Không phá vỡ kiến trúc Master Profile và quyền sở hữu Creator đã định nghĩa. (Đã hoàn thành)
 
-- [ ] **4.5. Viết Integration Tests cho Phase 4 (TC17 – TC19, TC21)**
+- [x] **4.5. Viết Integration Tests cho Phase 4 (TC17 – TC19, TC21)**
   - **File:** `tests/test_post_validation.py`
   - **Nhiệm vụ:**
     - `TC17`: Deep Crawl xong nhưng phát hiện toàn bài catalog shop $\rightarrow$ Bị chặn tại Post-validation, không gửi sang Java.
     - `TC18`: Candidate đạt mọi tiêu chuẩn Post-validation $\rightarrow$ Gửi thành công sang Java Ingest API.
     - `TC19`: Candidate có tín hiệu KOC và KOL đồng thời $\rightarrow$ Xử lý nhất quán, không lỗi runtime.
     - `TC21`: Luồng Refresh tài khoản cũ $\rightarrow$ Cập nhật metrics thành công, không tạo duplicate account.
-  - **Tiêu chí nghiệm thu:** Toàn bộ test hoàn thành xanh mượt.
+  - **Tiêu chí nghiệm thu:** Toàn bộ test hoàn thành xanh mượt (5/5 PASS). (Đã hoàn thành)
 
 ---
 
@@ -423,8 +423,8 @@
 ```
 [x] Phase 1: Core Classification Engine (Rule Config -> Signal Extractor -> BR-01..BR-05 -> Unit Tests) [ĐÃ HOÀN THÀNH - 12/12 TESTS PASS]
 [x] Phase 2: Lightweight Preflight & Candidate Staging (Search Card Filter -> Preflight Fetcher -> Staging DB) [ĐÃ HOÀN THÀNH - 7/7 TESTS PASS]
-[ ] Phase 3: Celery Pipeline & Deep Crawl Gate (Preflight Task -> Deep Crawl Gate -> Refactor Bot/API)
-[ ] Phase 4: Data Quality & Post-Validation (Post-validator -> Review Queue -> Safe Java Ingest)
+[x] Phase 3: Celery Pipeline & Deep Crawl Gate (Preflight Task -> Deep Crawl Gate -> Refactor Bot/API) [ĐÃ HOÀN THÀNH - 9/9 TESTS PASS]
+[x] Phase 4: Data Quality & Post-Validation (Post-validator -> Review Queue -> Safe Java Ingest) [ĐÃ HOÀN THÀNH - 5/5 TESTS PASS]
 [ ] Phase 5: Benchmark, Test Suite & Documentation (22 Test Cases -> Latency Benchmark -> Runbook)
 ```
 

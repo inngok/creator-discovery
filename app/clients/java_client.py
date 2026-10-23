@@ -1,6 +1,9 @@
 import os
 
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from app.core.logger import setup_logger
 
@@ -27,9 +30,20 @@ class JavaClient:
                     f"Failed to POST to backend. Status: {response.status_code}, Msg: {response.text}"
                 )
                 return False
-            else:
-                logger.info("Successfully sent payload to Java backend!")
-                return True
+
+            try:
+                res_json = response.json()
+                data_obj = res_json.get("data", {})
+                if isinstance(data_obj, dict) and data_obj.get("status") == "REJECTED":
+                    logger.warning(
+                        f"Backend REJECTED ingest: {data_obj.get('message', 'No message')}"
+                    )
+                    return False
+            except Exception:
+                pass
+
+            logger.info("Successfully sent payload to Java backend!")
+            return True
         except Exception as e:
             logger.error(f"Failed to connect to backend: {e}")
             return False

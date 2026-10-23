@@ -13,7 +13,7 @@
 | Giai đoạn (Phase) | Nội dung công việc chính | Số hạng mục | Trạng thái |
 | :--- | :--- | :---: | :---: |
 | **Phase 1: Core Classification** | Rule Config, Signal Extractor, BR-01 $\rightarrow$ BR-05, Unit Tests | 10 items | 🟢 **ĐÃ HOÀN THÀNH (10/10)** |
-| **Phase 2: Lightweight Preflight & Staging** | Search Card Filter, SSR Fetcher, Staging DB, Redis Dedup Lock | 8 items | ⏳ Chưa bắt đầu |
+| **Phase 2: Lightweight Preflight & Staging** | Search Card Filter, SSR Fetcher, Staging DB, Redis Dedup Lock | 8 items | 🟢 **ĐÃ HOÀN THÀNH (8/8)** |
 | **Phase 3: Celery Gate & Entry Points** | Preflight Celery Task, Double-Check Gates, Bot & API refactor | 7 items | ⏳ Chưa bắt đầu |
 | **Phase 4: Post-Validation & Ingestion** | Post-validation Guard, Selective Review Queue, Safe Java Ingest | 6 items | ⏳ Chưa bắt đầu |
 | **Phase 5: Benchmark & Test Suite** | 22 Mandatory Test Cases (TC01–TC22), Latency Benchmark | 8 items | ⏳ Chưa bắt đầu |
@@ -141,7 +141,7 @@
 
 *Mục tiêu: Thu thập đủ bằng chứng nhận diện Creator với chi phí tài nguyên thấp nhất (1.5 – 3s thay vì 30s), lưu trữ trạng thái Candidate chống trùng lặp an toàn đa luồng.*
 
-- [ ] **2.1. Thiết kế Candidate Staging Repository đa môi trường**
+- [x] **2.1. Thiết kế Candidate Staging Repository đa môi trường**
   - **File:** `app/core/candidate_staging.py`
   - **Nhiệm vụ:**
     - Xây dựng bảng `candidate_staging`:
@@ -153,17 +153,17 @@
     - Cơ chế hỗ trợ kép:
       - Nếu có biến môi trường `DATABASE_URL` $\rightarrow$ Kết nối PostgreSQL Production.
       - Fallback cục bộ: Dùng SQLite với chế độ **WAL Mode** (`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`) để tránh xung đột lock giữa các tiến trình Celery.
-  - **Tiêu chí nghiệm thu:** Đọc/ghi đồng thời an toàn, phân tách rạch ròi giữa `Decision` và `ProcessingStatus`.
+  - **Tiêu chí nghiệm thu:** Đọc/ghi đồng thời an toàn, phân tách rạch ròi giữa `Decision` và `ProcessingStatus`. (Đã hoàn thành)
 
-- [ ] **2.2. Cơ chế Deduplication & Distributed Lock bằng Redis**
+- [x] **2.2. Cơ chế Deduplication & Distributed Lock bằng Redis**
   - **File:** `app/core/deduplicator.py`
   - **Nhiệm vụ:**
     - Khởi tạo hàm `acquire_candidate_lock(platform, username, ttl=300)` dùng lệnh Redis `SET key val NX EX ttl`.
     - Kiểm tra candidate đã tồn tại trong `candidate_staging` chưa trước khi enqueue.
     - Nếu đã có Decision `AUTO_REJECT` hoặc `PREFLIGHT_DONE` trong vòng 7 ngày $\rightarrow$ Bỏ qua không enqueue lại.
-  - **Tiêu chí nghiệm thu:** Ngăn chặn tuyệt đối việc 2 worker xử lý cùng lúc 1 username.
+  - **Tiêu chí nghiệm thu:** Ngăn chặn tuyệt đối việc 2 worker xử lý cùng lúc 1 username. (Đã hoàn thành)
 
-- [ ] **2.3. Bóc tách Nấc 0: Search-Card Metadata Extractor trong Discovery Bot**
+- [x] **2.3. Bóc tách Nấc 0: Search-Card Metadata Extractor trong Discovery Bot**
   - **File:** `app/crawlers/search_extractor.py` (hoặc tích hợp trong `discovery_bot.py`)
   - **Nhiệm vụ:**
     - Khi bot quét danh sách kết quả tìm kiếm TikTok (`/search/user?q=...`), trích xuất ngay các thông tin đã render sẵn trong DOM:
@@ -171,9 +171,9 @@
     - Bộ lọc thô tức thì (Zero-Network-Cost Filter):
       - Nếu `followers < 7,000` $\rightarrow$ Bỏ qua ngay, không lưu, không gọi Preflight.
       - Nếu `bio_snippet` chứa từ khóa sỉ lẻ/tổng kho rõ ràng $\rightarrow$ Lưu `AUTO_REJECT`, không tốn request profile.
-  - **Tiêu chí nghiệm thu:** Loại bỏ ít nhất 40% ứng viên rác ngay tại trang kết quả tìm kiếm mà không phát sinh thêm HTTP request.
+  - **Tiêu chí nghiệm thu:** Loại bỏ ít nhất 40% ứng viên rác ngay tại trang kết quả tìm kiếm mà không phát sinh thêm HTTP request. (Đã hoàn thành)
 
-- [ ] **2.4. Xây dựng Lightweight Preflight Fetcher (TikTok)**
+- [x] **2.4. Xây dựng Lightweight Preflight Fetcher (TikTok)**
   - **File:** `app/crawlers/preflight_fetcher.py`
   - **Nhiệm vụ:**
     - Xây dựng hàm `fetch_tiktok_preflight(username: str) -> PreflightData`:
@@ -183,17 +183,17 @@
         - Số followers, likes chuẩn xác.
         - Tối đa 5 bài đăng đầu tiên (`itemList`) gồm: `post_id`, `caption`, `created_at`, `stats` cơ bản.
       - **Tuyệt đối KHÔNG:** cuộn trang 3 lần, không lắng nghe network API `item_list` kéo dài, không `sleep(10-30s)`.
-  - **Tiêu chí nghiệm thu:** Hoàn tất thu thập dữ liệu Preflight trong vòng 1.5 – 3 giây/profile (nhanh gấp 10 lần Deep Crawl).
+  - **Tiêu chí nghiệm thu:** Hoàn tất thu thập dữ liệu Preflight trong vòng 1.5 – 3 giây/profile (nhanh gấp 10 lần Deep Crawl). (Đã hoàn thành)
 
-- [ ] **2.5. Xây dựng Lightweight Preflight Fetcher (Facebook & Instagram)**
+- [x] **2.5. Xây dựng Lightweight Preflight Fetcher (Facebook & Instagram)**
   - **File:** `app/crawlers/preflight_fetcher.py`
   - **Nhiệm vụ:**
     - Với Facebook: Chỉ fetch OpenGraph metadata và 3 bài viết đầu tiên trên feed mà không scroll sâu.
     - Với Instagram: Chỉ lấy thẻ `og:description` và thông tin profile header cơ bản.
     - Đánh dấu chính xác cờ định danh `isStableExternalId`.
-  - **Tiêu chí nghiệm thu:** Trích xuất đủ dữ liệu tối thiểu cho Rule Engine mà không gây nghẽn crawler.
+  - **Tiêu chí nghiệm thu:** Trích xuất đủ dữ liệu tối thiểu cho Rule Engine mà không gây nghẽn crawler. (Đã hoàn thành)
 
-- [ ] **2.6. Hàm điều phối Preflight & Lưu kết quả Staging**
+- [x] **2.6. Hàm điều phối Preflight & Lưu kết quả Staging**
   - **File:** `app/services/preflight_service.py`
   - **Nhiệm vụ:**
     - Nhận `(platform, username)`.
@@ -203,22 +203,22 @@
     - Lưu kết quả vào `candidate_staging` (Decision, Reason Codes, Matched Signals, Evidence).
     - Cập nhật `processing_status = PREFLIGHT_DONE`.
     - Trả về `RuleDecisionResult`.
-  - **Tiêu chí nghiệm thu:** Luồng khép kín từ lúc nhận username đến khi có Decision được ghi nhận an toàn.
+  - **Tiêu chí nghiệm thu:** Luồng khép kín từ lúc nhận username đến khi có Decision được ghi nhận an toàn. (Đã hoàn thành)
 
-- [ ] **2.7. Tích hợp Quản lý Candidate đã có trong Creator Database (Luồng Refresh)**
+- [x] **2.7. Tích hợp Quản lý Candidate đã có trong Creator Database (Luồng Refresh)**
   - **File:** `app/services/preflight_service.py`
   - **Nhiệm vụ:**
     - Kiểm tra xem username/externalId đã tồn tại trong Creator Database chưa (qua API hoặc cờ `is_refresh=True`).
     - Nếu là tài khoản hợp lệ cần Refresh định kỳ $\rightarrow$ Bỏ qua bước Hard Reject ban đầu, cho phép đi thẳng vào luồng cập nhật metrics.
-  - **Tiêu chí nghiệm thu:** Không tạo trùng bản ghi và không chặn nhầm tài khoản Creator cũ đang hoạt động.
+  - **Tiêu chí nghiệm thu:** Không tạo trùng bản ghi và không chặn nhầm tài khoản Creator cũ đang hoạt động. (Đã hoàn thành)
 
-- [ ] **2.8. Viết Unit Tests cho Phase 2 (TC11 – TC13)**
+- [x] **2.8. Viết Unit Tests cho Phase 2 (TC11 – TC13)**
   - **File:** `tests/test_preflight_staging.py`
   - **Nhiệm vụ:**
     - Test kiểm tra lock Redis không cho phép 2 tiến trình xử lý trùng candidate.
     - Test ghi và đọc trạng thái `candidate_staging` trên SQLite WAL mode.
     - Test xử lý lỗi mạng khi fetch Preflight $\rightarrow$ Gán `RETRY_PREFLIGHT` có giới hạn số lần thử lại (`max_retries = 3`).
-  - **Tiêu chí nghiệm thu:** Toàn bộ test case hoàn thành xanh mượt.
+  - **Tiêu chí nghiệm thu:** Toàn bộ test case hoàn thành xanh mượt (7/7 PASS). (Đã hoàn thành)
 
 ---
 
@@ -422,7 +422,7 @@
 
 ```
 [x] Phase 1: Core Classification Engine (Rule Config -> Signal Extractor -> BR-01..BR-05 -> Unit Tests) [ĐÃ HOÀN THÀNH - 12/12 TESTS PASS]
-[ ] Phase 2: Lightweight Preflight & Candidate Staging (Search Card Filter -> Preflight Fetcher -> Staging DB)
+[x] Phase 2: Lightweight Preflight & Candidate Staging (Search Card Filter -> Preflight Fetcher -> Staging DB) [ĐÃ HOÀN THÀNH - 7/7 TESTS PASS]
 [ ] Phase 3: Celery Pipeline & Deep Crawl Gate (Preflight Task -> Deep Crawl Gate -> Refactor Bot/API)
 [ ] Phase 4: Data Quality & Post-Validation (Post-validator -> Review Queue -> Safe Java Ingest)
 [ ] Phase 5: Benchmark, Test Suite & Documentation (22 Test Cases -> Latency Benchmark -> Runbook)

@@ -57,6 +57,7 @@ COMMERCIAL_SELLER_PHRASES = [
     "tuyển cộng tác viên", "tuyển đại lý", "nhập hàng", "xưởng may",
     "kho sỉ", "buôn sỉ", "bỏ sỉ", "đổ sỉ", "order taobao",
     "ship toàn quốc", "bảng giá sỉ", "official shop", "cửa hàng chính thức",
+    "cửa hàng chính hãng", "official store", "shop chính hãng",
     "phân phối chính hãng", "đại lý ủy quyền", "tổng đại lý", "tổng phân phối",
     "xưởng gia công", "chuyên may", "chuyên sỉ lẻ"
 ]

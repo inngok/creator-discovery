@@ -302,6 +302,68 @@ class TestPostValidationAndSafeIngestion(unittest.TestCase):
         self.assertEqual(rejected_rec.decision, Decision.MANAGER_REJECTED)
         self.assertEqual(rejected_rec.processing_status, ProcessingStatus.FAILED)
 
+    def test_tc22_end_to_end_pipeline_and_identity_isolation(self):
+        """
+        TC22: Toàn vẹn luồng End-to-End & Bảo toàn cách ly Creator Master Identity.
+        - Preflight PASS -> Staging AUTO_ACCEPT_KOC -> Worker Gate mở
+        - Deep Crawl hoàn tất -> Post-Validation đạt chuẩn
+        - Java Mapper bảo toàn tuyệt đối sourceType='PUBLIC' và masterId=None
+        - Java Ingest thành công -> Cập nhật Staging INGESTED.
+        """
+        username = "genuine_koc_tc22"
+
+        # 1. Staging với AUTO_ACCEPT_KOC
+        staging_repo.upsert_candidate(
+            CandidateStagingRecord(
+                platform="TIKTOK",
+                username=username,
+                processing_status=ProcessingStatus.PREFLIGHT_DONE,
+                decision=Decision.AUTO_ACCEPT_KOC,
+                primary_type="KOC",
+                reason_codes=["BR05_AUTO_ACCEPT_KOC"],
+            )
+        )
+
+        # 2. Mock Crawl Payload
+        mock_payload = self._create_mock_ingest_payload(
+            username=username,
+            followers=35000,
+            posts_captions=[
+                "Review serum trị mụn phục hồi da chân thật sau 1 tháng trải nghiệm",
+                "Chấm điểm 5 loại kem chống nắng cho da dầu mụn đỉnh chóp",
+                "Unbox bàn chải điện sóng âm thông minh giá học sinh sinh viên",
+                "Mọi người lưu ý kem này chất hơi đặc nhưng thấm cực nhanh nha",
+            ],
+            creator_type="KOC",
+        )
+
+        with patch("app.workers.tasks._crawl_tiktok_profile_sync", return_value=mock_payload), \
+             patch("app.workers.tasks.process_ai_enrichment", return_value=mock_payload.aiEnrichment), \
+             patch("app.workers.tasks.java_client.send_creator_data", return_value=True) as mock_send_java:
+
+            # 3. Kích hoạt Worker Deep Crawl
+            res = process_tiktok_profile.run(username=username)
+
+            # 4. Kiểm chứng kết quả thành công
+            self.assertIsNotNone(res)
+            self.assertEqual(res["creator"]["username"], username)
+
+            # 5. Kiểm tra tính bảo toàn Identity trên Java Payload
+            mock_send_java.assert_called_once()
+            sent_payload = mock_send_java.call_args[0][0]
+
+            # Ràng buộc bất biến: sourceType='PUBLIC' và masterId=None
+            self.assertEqual(sent_payload["sourceType"], "PUBLIC")
+            self.assertEqual(sent_payload["source_type"], "PUBLIC")
+            self.assertIsNone(sent_payload["masterId"])
+            self.assertIsNone(sent_payload["master_id"])
+            self.assertEqual(len(sent_payload["embedding"]), 768)
+
+            # 6. Kiểm tra Staging chuyển thành INGESTED
+            staged = staging_repo.get_candidate("TIKTOK", username)
+            self.assertIsNotNone(staged)
+            self.assertEqual(staged.processing_status, ProcessingStatus.INGESTED)
+
 
 if __name__ == "__main__":
     unittest.main()

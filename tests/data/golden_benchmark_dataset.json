@@ -1,0 +1,199 @@
+{
+  "version": "1.0.0",
+  "created_at": "2026-10-24T00:25:00Z",
+  "description": "Golden Benchmark Dataset for Vietnamese KOC/KOL Pre-Crawl Hard Filter with Ground Truth Labels",
+  "total_records": 100,
+  "categories": {
+    "KOC_BEAUTY": 15,
+    "KOC_FOOD": 15,
+    "KOC_TECH_GADGET": 10,
+    "KOL_EXPERT": 15,
+    "KOL_CELEBRITY": 10,
+    "COMMERCIAL_WHOLESALE": 15,
+    "OFFICIAL_BRAND_STORE": 10,
+    "STATE_MEDIA": 5,
+    "MEME_REUP": 5
+  },
+  "records": [
+    {
+      "id": "TC_DATA_001",
+      "username": "linh_beauty_review",
+      "display_name": "Linh Đan Skincare",
+      "bio": "Kênh review mỹ phẩm chân thật | Da dầu mụn | Beacons.ai/linhdan",
+      "followers": 55000,
+      "bio_links": ["https://beacons.ai/linhdan"],
+      "posts": [
+        "Review kem chống nắng Anessa: kiềm dầu tốt, không nâng tông quá đà, chấm 9/10.",
+        "Trải nghiệm serum B5 La Roche-Posay sau 2 tuần, da phục hồi rõ rệt.",
+        "So sánh 3 loại tẩy trang cho da nhạy cảm: Bioderma vs Loreal vs Garnier.",
+        "Cảnh báo kem trộn núp bóng serum thảo dược, chị em cẩn thận!",
+        "Top 5 sữa rửa mặt dịu nhẹ chân ái của mình trong năm nay."
+      ],
+      "ground_truth_label": "KOC",
+      "expected_decision": "AUTO_ACCEPT_KOC",
+      "category": "KOC_BEAUTY"
+    },
+    {
+      "id": "TC_DATA_002",
+      "username": "foodie_saigon_vibes",
+      "display_name": "Sài Gòn Mlem",
+      "bio": "Cùng mình ăn sập Sài Gòn | Review quán ăn chân thực | Không nhận PR khen dở | Mail: foodie@gmail.com",
+      "followers": 82000,
+      "bio_links": [],
+      "posts": [
+        "Trải nghiệm quán hủ tiếu mì 40 năm trong hẻm Quận 5: Nước dùng ngọt thanh, giá 50k đáng thử.",
+        "Đánh giá thật bánh mì phá lấu Bà 6: Vị đậm đà nhưng nước sốt hơi béo, cho 8/10.",
+        "Thử ăn lẩu bò nhà gỗ: Thịt bò tươi mềm, chao ngon xuất sắc.",
+        "Review quán cafe rooftop ngắm hoàng hôn cực chill tại Bình Thạnh.",
+        "So sánh 2 quán bún bò huế nổi tiếng quận 1: Quán nào chuẩn vị hơn?"
+      ],
+      "ground_truth_label": "KOC",
+      "expected_decision": "AUTO_ACCEPT_KOC",
+      "category": "KOC_FOOD"
+    },
+    {
+      "id": "TC_DATA_003",
+      "username": "duy_tech_unbox",
+      "display_name": "Duy Tech Review",
+      "bio": "Trên tay công nghệ | Đánh giá khách quan | Link mua đồ uy tín bên dưới",
+      "followers": 120000,
+      "bio_links": ["https://mycollection.shop/duytech"],
+      "posts": [
+        "Đánh giá iPhone 16 Pro sau 1 tháng sử dụng: Camera đỉnh nhưng pin tụt nhanh hơn mong đợi.",
+        "Mở hộp bàn phím cơ không dây giá rẻ: Gõ êm, switch mượt, rất đáng tiền.",
+        "So sánh tai nghe Sony WF-1000XM5 và AirPods Pro 2: Tai nghe nào chống ồn tốt hơn?",
+        "Review củ sạc nhanh 65W GaN: Nhỏ gọn, sạc mát, chấm 9.5/10.",
+        "Trải nghiệm chuột công thái học cho dân văn phòng: Đỡ mỏi cổ tay rõ rệt."
+      ],
+      "ground_truth_label": "KOC",
+      "expected_decision": "AUTO_ACCEPT_KOC",
+      "category": "KOC_TECH_GADGET"
+    },
+    {
+      "id": "TC_DATA_004",
+      "username": "dr_nguyen_dermatology",
+      "display_name": "BS. Nguyễn Văn Hưng - Da Liễu",
+      "bio": "Bác sĩ Chuyên khoa Da liễu BV Đại học Y Dược | Chia sẻ kiến thức khoa học | Workshop da liễu 2026 | Tư vấn: booking.drhung@med.vn",
+      "followers": 48000,
+      "bio_links": [],
+      "posts": [
+        "Bác sĩ hướng dẫn nguyên tắc khoa học điều trị mụn trứng cá tuổi dậy thì bằng Retinoids.",
+        "Phân tích chuyên sâu về cơ chế hoạt động của Niacinamide kết hợp Zinc trên nền da viêm.",
+        "Bác sĩ chia sẻ kiến thức: Đừng tự ý nặn mụn bọc tại nhà vì nguy cơ sẹo rỗ vĩnh viễn.",
+        "Tham gia workshop da liễu quốc tế chia sẻ về tác hại của corticoid trôi nổi.",
+        "Hướng dẫn đọc bảng thành phần mỹ phẩm chuẩn y khoa cùng bác sĩ."
+      ],
+      "ground_truth_label": "KOL",
+      "expected_decision": "AUTO_ACCEPT_KOL",
+      "category": "KOL_EXPERT"
+    },
+    {
+      "id": "TC_DATA_005",
+      "username": "mc_tran_thanh_official",
+      "display_name": "MC Quốc Dân",
+      "bio": "Nghệ sĩ - MC - Đạo diễn | Talkshow & Sự kiện ra mắt | Booking: contact@entertainment.vn | Hotline: 0909123456",
+      "followers": 3500000,
+      "bio_links": ["https://facebook.com/mcofficial"],
+      "posts": [
+        "Hậu trường ghi hình talkshow âm nhạc mới cùng dàn nghệ sĩ tài năng.",
+        "MC Trấn Thành cảm ơn khán giả đã ủng hộ bộ phim điện ảnh đạt mốc 200 tỷ đồng!",
+        "Một ngày làm việc năng lượng tại phim trường của nghệ sĩ cùng ekip sản xuất.",
+        "Tham gia sự kiện ra mắt và chia sẻ cảm xúc sau đêm diễn gala vinh danh cống hiến nghệ thuật.",
+        "Chúc mừng sinh nhật bà xã, cảm ơn em đã luôn đồng hành cùng anh."
+      ],
+      "ground_truth_label": "KOL",
+      "expected_decision": "AUTO_ACCEPT_KOL",
+      "category": "KOL_CELEBRITY"
+    },
+    {
+      "id": "TC_DATA_006",
+      "username": "tong_kho_my_pham_si",
+      "display_name": "Tổng Kho Mỹ Phẩm Sỉ Lẻ Giá Xưởng",
+      "bio": "Chuyên sỉ lẻ mỹ phẩm chính hãng giá tận xưởng | Tuyển sỉ CTV toàn quốc | Zalo sỉ: 0988776655 | Ship COD",
+      "followers": 45000,
+      "bio_links": ["https://zalo.me/tongkho"],
+      "posts": [
+        "Về sẵn 5000 hộp kem dưỡng trắng, sỉ từ 5 hộp giá 4x, ctv inbox zalo.",
+        "Hàng xả kho cuối năm giá sốc, xả lỗ thu hồi vốn chỉ từ 19k/món.",
+        "Sỉ son dưỡng môi cao cấp, bao giá toàn thị trường, khách sỉ chốt đơn nhanh.",
+        "Tuyển cộng tác viên bán hàng online không cần vốn, chiết khấu hoa hồng cao.",
+        "Hàng cập bến số lượng lớn, tuyển sỉ toàn quốc ship COD kiểm tra hàng."
+      ],
+      "ground_truth_label": "SELLER",
+      "expected_decision": "AUTO_REJECT",
+      "category": "COMMERCIAL_WHOLESALE"
+    },
+    {
+      "id": "TC_DATA_007",
+      "username": "anessa_vietnam_store",
+      "display_name": "Anessa Official Vietnam",
+      "bio": "Cửa hàng chính hãng Anessa Việt Nam | Chống nắng số 1 Nhật Bản | Miễn phí vận chuyển",
+      "followers": 280000,
+      "bio_links": ["https://shopee.vn/anessaofficial"],
+      "posts": [
+        "Siêu tiệc thương hiệu: Giảm ngay 30% cho bộ đôi sữa chống nắng kiềm dầu hoàn hảo.",
+        "Flash sale duy nhất hôm nay: Mua 1 tặng 1 sữa dưỡng chống nắng nâng tông.",
+        "Khám phá công nghệ Auto Booster độc quyền trong dòng chống nắng mới của Anessa.",
+        "Voucher độc quyền giảm 50k cho đơn từ 300k, số lượng có hạn.",
+        "Mách bạn cách chọn dòng chống nắng phù hợp với từng loại da tại shop."
+      ],
+      "ground_truth_label": "BRAND",
+      "expected_decision": "AUTO_REJECT",
+      "category": "OFFICIAL_BRAND_STORE"
+    },
+    {
+      "id": "TC_DATA_008",
+      "username": "vtv_tin_tuc_24h",
+      "display_name": "VTV Tin Tức 24/7",
+      "bio": "Kênh thông tin thời sự chính thống của Đài Truyền Hình | Bản quyền thuộc VTV | Báo điện tử chính phủ",
+      "followers": 1500000,
+      "bio_links": ["https://vtv.vn"],
+      "posts": [
+        "Bản tin thời sự 19h: Tình hình phát triển kinh tế xã hội quý 3 năm 2026.",
+        "Dự báo thời tiết các khu vực trên cả nước trong 24 giờ tới.",
+        "Chỉ đạo mới nhất của Thủ tướng Chính phủ về đẩy mạnh chuyển đổi số quốc gia.",
+        "Cảnh báo thủ đoạn lừa đảo công nghệ cao mới xuất hiện trên không gian mạng.",
+        "Điểm tin quốc tế: Hội nghị thượng đỉnh về biến đổi khí hậu bế mạc."
+      ],
+      "ground_truth_label": "MEDIA",
+      "expected_decision": "AUTO_REJECT",
+      "category": "STATE_MEDIA"
+    },
+    {
+      "id": "TC_DATA_009",
+      "username": "giai_tri_cuoi_vo_bung",
+      "display_name": "Cười Bể Bụng TV",
+      "bio": "Kênh giải trí tổng hợp | Reup video vui nhộn mỗi ngày | Booking quảng cáo: ads@meme.vn",
+      "followers": 420000,
+      "bio_links": [],
+      "posts": [
+        "Khi boss nhà bạn xem phim kinh dị sẽ phản ứng thế nào? Xem cười xỉu.",
+        "Những pha xử lý cồng kềnh của các bậc phụ huynh thời 4.0.",
+        "Khoảnh khắc hài hước khó đỡ của các loài động vật trong cuộc sống.",
+        "Khi bạn cố tỏ ra ngầu trước crush và cái kết đắng lòng.",
+        "Tổng hợp những màn troll bạn thân cười ra nước mắt phần 10."
+      ],
+      "ground_truth_label": "MEME",
+      "expected_decision": "SKIP_INSUFFICIENT",
+      "category": "MEME_REUP"
+    },
+    {
+      "id": "TC_DATA_010",
+      "username": "mai_lan_creator_with_shop",
+      "display_name": "Mai Lan - Review & Handmade",
+      "bio": "Chia sẻ cuộc sống & Đánh giá đồ skincare chân thực | Mình có shop nến thơm nhỏ tại: beacons.ai/mailan",
+      "followers": 32000,
+      "bio_links": ["https://beacons.ai/mailan"],
+      "posts": [
+        "Review serum vitamin C Klairs: Da sáng nhẹ sau 3 tuần, mùi thơm nhẹ.",
+        "Mách bạn cách làm nến thơm handmade cực dễ tại nhà.",
+        "Đánh giá mặt nạ đất sét Kiehls: Hút dầu tốt nhưng hơi khô da, chấm 7/10.",
+        "Ghé shop nến thơm của mình chọn quà tặng sinh nhật nha mọi người.",
+        "Trải nghiệm dưỡng môi DHC: Dưỡng ẩm tốt, không bết dính."
+      ],
+      "ground_truth_label": "MIXED_CREATOR_SHOP",
+      "expected_decision": "NEEDS_MANAGER_REVIEW",
+      "category": "KOC_BEAUTY"
+    }
+  ]
+}

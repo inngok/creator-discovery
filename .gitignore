@@ -2,7 +2,10 @@ venv/
 __pycache__/
 *.pyc
 .env
-data/
+/data/
+app/ai/data/
+app/ai_development/data/
+!tests/data/
 chrome_profile/
 server.log
 service_pids.txt

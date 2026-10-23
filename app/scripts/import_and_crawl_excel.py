@@ -14,7 +14,7 @@ from app.ai.services.embedding_service import embedding_service
 from app.ai.training_db import save_training_data
 from app.clients.java_client import java_client
 from app.core.logger import setup_logger
-from app.workers.tasks import process_tiktok_profile
+from app.workers.tasks import preflight_candidate_task
 
 logger = setup_logger("import_excel")
 
@@ -151,17 +151,17 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: b
             existing_usernames.add(uname_lower)
 
             try:
-                process_tiktok_profile.delay(uname)
+                preflight_candidate_task.delay("TIKTOK", uname)
                 success_count += 1
                 if success_count % 50 == 0 or success_count == len(df):
-                    logger.info(f"[Celery Enqueue] Đã đưa {success_count} creators mới vào hàng đợi (Đã bỏ qua {skip_count} trùng)...")
+                    logger.info(f"[Preflight Enqueue] Đã đưa {success_count} creators mới vào Preflight Queue (Đã bỏ qua {skip_count} trùng)...")
                 if delay > 0:
                     time.sleep(delay)
             except Exception as e:
-                logger.error(f"[-] Lỗi đưa @{uname} vào Celery: {e}")
+                logger.error(f"[-] Lỗi đưa @{uname} vào Preflight Queue: {e}")
 
-        logger.info(f"[V] HOÀN TẤT! Đã đưa {success_count} Creator mới vào Celery (Bỏ qua {skip_count} creator bị trùng).")
-        logger.info("[*] Celery Worker sẽ tự động cào mới, chạy AI và đẩy sang Deploy Backend.")
+        logger.info(f"[V] HOÀN TẤT! Đã đưa {success_count} Creator mới vào Preflight Queue (Bỏ qua {skip_count} creator bị trùng).")
+        logger.info("[*] Preflight Worker sẽ kiểm tra nhanh, lọc KOC/KOL hợp lệ trước khi kích hoạt Deep Crawl.")
 
     elif mode == "direct":
         logger.info("\n=== CHẾ ĐỘ 2: ĐẨY DỮ LIỆU CÓ SẴN THẲNG VÀO DEPLOY BACKEND & AI DB ===")

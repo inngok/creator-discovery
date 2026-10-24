@@ -20,12 +20,17 @@ class ExplanationInput:
     niche: str
     category: str
     creator_type: str                   # KOL / KOC / CELEBRITY
+    engagement_rate_views: float | None = None  # View-based ER (%) cho TikTok/Reels/Shorts
+    platform: str = "TIKTOK"
     avg_views: float = 0.0
     avg_likes: float = 0.0
     similarity_score: float = 0.0       # Score từ vector search (0.0 – 1.0)
     campaign_brief: str = ""            # Brief của campaign (optional)
     content_summary: str = ""           # Bio/summary của creator
     top_tags: list[str] = field(default_factory=list)
+    target_followers: int | None = None
+    min_followers: int | None = None
+    max_followers: int | None = None
 
 
 @dataclass
@@ -68,11 +73,40 @@ def _tier_info(followers: int) -> tuple[str, float, float]:
     return next((label, benchmark, base_score) for limit, label, benchmark, base_score in FOLLOWER_TIERS if followers < limit)
 
 
-def _calculate_engagement_score(rate: float, followers: int) -> tuple[float, str]:
+def _calculate_engagement_score(
+    rate: float,
+    followers: int,
+    er_views: float | None = None,
+    platform: str = "TIKTOK",
+    avg_views: float = 0.0,
+    avg_likes: float = 0.0,
+) -> tuple[float, str]:
     """
     Tiêu chí 1: engagementScore
-    So sánh ER thực tế với ER Benchmark chuẩn của Tier.
+    - Nền tảng video ngắn (TikTok, Reels, Shorts): Ưu tiên tính theo View-based Engagement Rate (ER_views)
+      ER_views = (avgLikes + avgComments + avgShares) / avgViews * 100%
+      Benchmark chuẩn video ngắn: 5.0%
+    - Nền tảng truyền thống / Không có views: So sánh với Follower-based ER benchmark theo Tier.
     """
+    is_short_video = str(platform or "").upper() in {"TIKTOK", "REELS", "SHORTS", "YOUTUBE_SHORTS"}
+
+    computed_er_views = er_views
+    if computed_er_views is None and avg_views > 0 and avg_likes > 0:
+        computed_er_views = (avg_likes / avg_views) * 100.0
+
+    if is_short_video and computed_er_views is not None and computed_er_views > 0:
+        benchmark = 5.0  # Benchmark chuẩn video ngắn
+        score = min(100.0, (computed_er_views / benchmark) * 100.0)
+        score = round(score, 1)
+        if computed_er_views >= benchmark:
+            reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) vượt chuẩn {benchmark}% của video ngắn."
+        elif score >= 70.0:
+            reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) duy trì tốt, đạt mức ổn định của video ngắn."
+        else:
+            reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) ở mức vừa phải."
+        return score, reason
+
+    # Fallback Follower-based ER theo Tier
     tier_label, benchmark, _ = _tier_info(followers)
     score = min(100.0, (rate / benchmark) * 100.0) if benchmark > 0 else 50.0
     score = round(score, 1)
@@ -86,11 +120,53 @@ def _calculate_engagement_score(rate: float, followers: int) -> tuple[float, str
     return score, reason
 
 
-def _calculate_follower_score(followers: int, brief: str = "") -> tuple[float, str]:
+
+def _calculate_follower_score(
+    followers: int,
+    brief: str = "",
+    target_followers: int | None = None,
+    min_followers: int | None = None,
+    max_followers: int | None = None,
+) -> tuple[float, str]:
     """
     Tiêu chí 2: followerScore
     Đánh giá độ tối ưu của phân khúc quy mô người theo dõi.
+    Sử dụng thang đo Logarithm (log10) và phạt phi đối xứng (Asymmetric Penalty)
+    để khắc phục lỗi phạt dốc rớt về 0 khi Followers vượt quá Target.
     """
+    import math
+
+    fl = max(1, followers)
+
+    # 1. Trường hợp có khoảng mục tiêu [min_followers, max_followers]
+    if min_followers and max_followers and min_followers <= max_followers:
+        if min_followers <= fl <= max_followers:
+            return 100.0, f"Lượng theo dõi {followers:,} người nằm trọn vẹn trong khoảng mục tiêu ({min_followers:,} - {max_followers:,})."
+        elif fl < min_followers:
+            penalty = (math.log10(min_followers) - math.log10(fl)) * 50.0
+            score = round(max(0.0, 100.0 - penalty), 1)
+            return score, f"Lượng theo dõi {followers:,} người thấp hơn mức tối thiểu ({min_followers:,}) của chiến dịch."
+        else:
+            # Vượt max: phạt nhẹ (hệ số 30, sàn 60.0) vì kênh lớn vẫn mang lại độ phủ
+            penalty = (math.log10(fl) - math.log10(max_followers)) * 30.0
+            score = round(max(60.0, 100.0 - penalty), 1)
+            return score, f"Lượng theo dõi {followers:,} người vượt mức tối đa ({max_followers:,}), gia tăng độ phủ lớn cho chiến dịch."
+
+    # 2. Trường hợp có mục tiêu cụ thể target_followers
+    if target_followers and target_followers > 0:
+        if fl == target_followers:
+            return 100.0, f"Lượng theo dõi {followers:,} người khớp chính xác mục tiêu ({target_followers:,})."
+        elif fl < target_followers:
+            penalty = (math.log10(target_followers) - math.log10(fl)) * 50.0
+            score = round(max(0.0, 100.0 - penalty), 1)
+            return score, f"Lượng theo dõi {followers:,} người đạt {score} điểm so với mục tiêu ({target_followers:,})."
+        else:
+            # Vượt target: phạt nhẹ (hệ số 30, sàn 50.0), không bao giờ rơi về 0
+            penalty = (math.log10(fl) - math.log10(target_followers)) * 30.0
+            score = round(max(50.0, 100.0 - penalty), 1)
+            return score, f"Lượng theo dõi {followers:,} người vượt mục tiêu ({target_followers:,}), giúp khuếch đại độ phủ thương hiệu."
+
+    # 3. Trường hợp không có Target cụ thể -> Dùng phân khúc Tier chuẩn
     tier_label, _, base_score = _tier_info(followers)
     brief_lower = brief.lower()
     tier_keyword = tier_label.split()[0].lower()
@@ -107,16 +183,27 @@ def _calculate_follower_score(followers: int, brief: str = "") -> tuple[float, s
 def _calculate_semantic_score(similarity_score: float) -> tuple[float, str]:
     """
     Tiêu chí 3: semanticMatchScore
-    Cosine Similarity giữa Creator Profile và Campaign Brief * 100.
+    Áp dụng Min-Max Rescaling quy đổi khoảng Cosine Similarity thực tế [0.30, 0.85]
+    của các mô hình Vector Embedding tiếng Việt (BKAI Bi-Encoder) về thang điểm [0, 100].
     """
-    pct = round(similarity_score * 100.0, 1)
-    if pct >= 75.0:
-        reason = "Nội dung các bài đăng gần đây rất ăn khớp với thông điệp của chiến dịch."
-    elif pct >= 50.0:
-        reason = "Phong cách nội dung khá phù hợp với định hướng quảng bá của nhãn hàng."
+    SIM_MIN = 0.30
+    SIM_MAX = 0.85
+    sim = max(0.0, min(1.0, float(similarity_score or 0.0)))
+
+    if sim <= SIM_MIN:
+        score = 0.0
+    elif sim >= SIM_MAX:
+        score = 100.0
     else:
-        reason = "Nội dung có điểm chạm nhất định với chủ đề chiến dịch."
-    return pct, reason
+        score = round(((sim - SIM_MIN) / (SIM_MAX - SIM_MIN)) * 100.0, 1)
+
+    if score >= 75.0:
+        reason = f"Nội dung các bài đăng gần đây rất ăn khớp với thông điệp của chiến dịch (độ tương đồng {score:.1f}/100)."
+    elif score >= 50.0:
+        reason = f"Phong cách nội dung khá phù hợp với định hướng quảng bá của nhãn hàng (độ tương đồng {score:.1f}/100)."
+    else:
+        reason = f"Nội dung có điểm chạm nhất định với chủ đề chiến dịch (độ tương đồng {score:.1f}/100)."
+    return score, reason
 
 
 def _calculate_niche_score(data: ExplanationInput) -> tuple[float, str]:
@@ -176,12 +263,25 @@ def generate_explanation(data: ExplanationInput) -> ExplanationOutput:
     score_breakdown: dict[str, float] = {}
 
     # 1. engagementScore
-    eng_score, eng_reason = _calculate_engagement_score(data.engagement_rate, data.followers)
+    eng_score, eng_reason = _calculate_engagement_score(
+        rate=data.engagement_rate,
+        followers=data.followers,
+        er_views=data.engagement_rate_views,
+        platform=data.platform,
+        avg_views=data.avg_views,
+        avg_likes=data.avg_likes,
+    )
     score_breakdown["engagementScore"] = eng_score
     reasons.append(eng_reason)
 
     # 2. followerScore
-    fol_score, fol_reason = _calculate_follower_score(data.followers, data.campaign_brief)
+    fol_score, fol_reason = _calculate_follower_score(
+        data.followers,
+        data.campaign_brief,
+        data.target_followers,
+        data.min_followers,
+        data.max_followers,
+    )
     score_breakdown["followerScore"] = fol_score
     reasons.append(fol_reason)
 

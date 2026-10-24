@@ -74,10 +74,23 @@ def compute_data_confidence(
     ]
     completeness_score = sum(completeness_fields) / len(completeness_fields)
 
-    # 4. Tính hợp lý (15%) - Đếm số lượng dị thường phát hiện được
+    # 4. Tính hợp lý (15%) - Phát hiện chỉ số ảo/buff ảo nhưng không phạt oan KOC viral tự nhiên
+    # Trên TikTok/Reels, video viral có thể đạt lượt xem gấp hàng trăm lần followers (ví dụ 2k followers, 300k views).
+    # Chỉ coi là view ảo / bot buff nếu lượt xem cực cao mà lượt like/tương tác bằng 0 hoặc dưới 0.1% views.
+    er_views = ((avg_likes / avg_views) * 100.0) if avg_views > 0 else 0.0
+    is_fake_engagement = (
+        (avg_views > 0 and er_views > 50.0)
+        or (avg_views == 0 and er > 100.0)
+        or (bool(posts) and avg_views > 0 and avg_likes == 0 and er == 0.0)
+    )
+    is_fake_views = (
+        (followers > 1000 and avg_views > followers * 1000 and avg_likes < avg_views * 0.001)
+        or (avg_views > 5000 and avg_likes == 0)
+        or (avg_views == 0 and avg_likes > 1000)
+    )
     anomalies = [
-        er > 50.0 or (bool(posts) and er == 0.0),
-        (followers > 1000 and avg_views > followers * 100) or (avg_views == 0 and avg_likes > 1000),
+        is_fake_engagement,
+        is_fake_views,
         followers <= 0,
         not posts,
     ]

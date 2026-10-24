@@ -86,6 +86,7 @@ class JavaMapper:
             "avgComments": result.avg_comments,
             "avgShares": result.avg_shares,
             "engagementRate": result.engagement_rate,
+            "engagementRateViews": result.engagement_rate_views,
             "niche": niche,
             "contentSummary": content_summary,
             "contact": getattr(result.creator, "publicEmail", None) or "",

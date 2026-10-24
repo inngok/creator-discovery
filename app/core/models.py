@@ -87,3 +87,17 @@ class IngestPayload(BaseModel):
         return (
             (self.avg_likes + self.avg_comments + self.avg_shares) / followers
         ) * 100
+
+    @property
+    def engagement_rate_views(self) -> float:
+        """
+        View-based Engagement Rate cho video ngắn (TikTok, Reels, Shorts):
+        ER_views = (avgLikes + avgComments + avgShares) / avgViews * 100%
+        """
+        views = self.avg_views
+        if views <= 0:
+            return 0.0
+        return (
+            (self.avg_likes + self.avg_comments + self.avg_shares) / views
+        ) * 100.0
+

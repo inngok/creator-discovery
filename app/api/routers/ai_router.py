@@ -18,6 +18,8 @@ class ExplainRequest(BaseModel):
     creatorName: str = Field(default="", description="Tên hiển thị của creator")
     followers: int = Field(..., ge=0)
     engagementRate: float = Field(default=0.0, ge=0.0)
+    engagementRateViews: float | None = Field(default=None, ge=0.0, description="ER tính theo lượt xem cho video ngắn (TikTok/Reels)")
+    platform: str = Field(default="TIKTOK", description="Nền tảng của Creator (TIKTOK, YOUTUBE, INSTAGRAM, FACEBOOK)")
     niche: str = Field(default="general")
     category: str = Field(default="Lifestyle")
     creatorType: str = Field(default="UNKNOWN")
@@ -59,6 +61,8 @@ async def explain_creator_recommendation(req: ExplainRequest):
             creator_name=req.creatorName,
             followers=req.followers,
             engagement_rate=req.engagementRate,
+            engagement_rate_views=req.engagementRateViews,
+            platform=req.platform,
             niche=req.niche,
             category=req.category,
             creator_type=req.creatorType,

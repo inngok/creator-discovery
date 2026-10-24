@@ -30,6 +30,16 @@ def classify_creator_type_smart(
     if bio_links is None:
         bio_links = []
 
+    username = str(username) if isinstance(username, str) else ""
+    display_name = str(display_name) if isinstance(display_name, str) else ""
+    bio = str(bio) if isinstance(bio, str) else ""
+    category = str(category) if isinstance(category, str) else ""
+    niche = str(niche) if isinstance(niche, str) else ""
+    try:
+        followers = int(followers)
+    except Exception:
+        followers = 0
+
     # 1. Thu thập toàn bộ văn bản từ Profile và Captions của các video gần đây
     captions = []
     for p in recent_posts:

@@ -2,6 +2,7 @@ import json
 from typing import Optional
 
 from app.ai.analyzer import process_ai_enrichment
+from app.ai.creator_classifier import classify_creator_type_smart
 from app.ai.rules.post_validator import validate_post_crawl
 from app.ai.rules.rule_config import Decision, ProcessingStatus
 from app.clients.java_client import java_client
@@ -158,11 +159,19 @@ def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Opt
                     + "\n"
                 )
 
-            creator_type = (
-                getattr(result.aiEnrichment, "creatorType", "UNKNOWN")
-                if result.aiEnrichment
-                else "UNKNOWN"
+            smart_type = classify_creator_type_smart(
+                username=result.creator.username,
+                display_name=result.creator.displayName,
+                bio=result.creator.bio or "",
+                followers=result.creator.followers,
+                recent_posts=result.recentPosts,
+                category=getattr(result.aiEnrichment, "category", "") or "",
+                niche=getattr(result.aiEnrichment, "niche", "") or "",
             )
+            if result.aiEnrichment:
+                result.aiEnrichment.creatorType = smart_type
+
+            creator_type = smart_type
 
             # Chốt chặn nghiêm ngặt: Chỉ gửi KOL/KOC sang Java Backend
             if creator_type not in ["KOL", "KOC"]:
@@ -271,11 +280,19 @@ def process_facebook_profile(self, username: str, is_refresh: bool = False) -> O
                     + "\n"
                 )
 
-            creator_type = (
-                getattr(result.aiEnrichment, "creatorType", "UNKNOWN")
-                if result.aiEnrichment
-                else "UNKNOWN"
+            smart_type = classify_creator_type_smart(
+                username=result.creator.username,
+                display_name=result.creator.displayName,
+                bio=result.creator.bio or "",
+                followers=result.creator.followers,
+                recent_posts=result.recentPosts,
+                category=getattr(result.aiEnrichment, "category", "") or "",
+                niche=getattr(result.aiEnrichment, "niche", "") or "",
             )
+            if result.aiEnrichment:
+                result.aiEnrichment.creatorType = smart_type
+
+            creator_type = smart_type
 
             if creator_type not in ["KOL", "KOC"]:
                 logger.warning(
@@ -381,11 +398,19 @@ def process_instagram_profile(self, username: str, is_refresh: bool = False) -> 
                     + "\n"
                 )
 
-            creator_type = (
-                getattr(result.aiEnrichment, "creatorType", "UNKNOWN")
-                if result.aiEnrichment
-                else "UNKNOWN"
+            smart_type = classify_creator_type_smart(
+                username=result.creator.username,
+                display_name=result.creator.displayName,
+                bio=result.creator.bio or "",
+                followers=result.creator.followers,
+                recent_posts=result.recentPosts,
+                category=getattr(result.aiEnrichment, "category", "") or "",
+                niche=getattr(result.aiEnrichment, "niche", "") or "",
             )
+            if result.aiEnrichment:
+                result.aiEnrichment.creatorType = smart_type
+
+            creator_type = smart_type
 
             if creator_type not in ["KOL", "KOC"]:
                 logger.warning(

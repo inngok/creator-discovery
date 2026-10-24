@@ -1,4 +1,6 @@
+import re
 from app.ai.services.embedding_service import embedding_service
+from app.core.confidence import compute_data_confidence
 from app.core.models import IngestPayload
 
 
@@ -52,6 +54,23 @@ class JavaMapper:
         except Exception as emb_err:
             embedding_vector = []
 
+        # 3. Tính toán dataConfidence theo 4 thành phần quy đổi:
+        # Data Confidence = (35% x Nguồn) + (30% x Độ tươi) + (20% x Độ đầy đủ) + (15% x Hợp lý)
+        data_confidence = compute_data_confidence(
+            source_type=getattr(result, "source", "PUBLIC"),
+            observed_at=getattr(result, "observedAt", None),
+            avatar_url=result.creator.avatarUrl or "",
+            bio=result.creator.bio or "",
+            followers=result.creator.followers or 0,
+            avg_views=result.avg_views or 0.0,
+            avg_likes=result.avg_likes or 0.0,
+            category=category,
+            niche=niche,
+            contact=getattr(result.creator, "publicEmail", None) or getattr(result.creator, "publicPhone", None) or "",
+            recent_posts=result.recentPosts or [],
+            er=result.engagement_rate or 0.0,
+        )
+
         return {
             "platform": result.creator.platform.value,
             "externalId": result.creator.externalId,
@@ -72,7 +91,7 @@ class JavaMapper:
             "contact": getattr(result.creator, "publicEmail", None) or "",
             "category": category,
             "freshnessStatus": "FRESH",
-            "dataConfidence": 0.95,
+            "dataConfidence": data_confidence,
             "crawlRunId": getattr(result, "crawlRunId", ""),
             "observedAt": result.observedAt.strftime("%Y-%m-%dT%H:%M:%S") if hasattr(result, "observedAt") and result.observedAt else None,
             "isStableExternalId": getattr(result.creator, "isStableExternalId", True),

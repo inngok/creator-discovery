@@ -104,6 +104,7 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: b
     col_likes = find_column(df, ["lượt thích trung bình", "avg likes", "likes"])
     col_eng = find_column(df, ["tỷ lệ tương tác", "engagement", "er"])
     col_profile = find_column(df, ["nhà sáng tạo tiktok", "link tiktok", "url"])
+    col_contact = find_column(df, ["liên hệ", "contact", "email", "phone", "sđt", "zalo"])
 
     if not col_id:
         logger.error("[-] Không tìm thấy cột chứa Username/ID Chuyên gia trong file!")
@@ -185,6 +186,7 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: b
             views = float(parse_int_safe(row[col_views])) if col_views else 0.0
             likes = float(parse_int_safe(row[col_likes])) if col_likes else 0.0
             p_url = str(row[col_profile]).strip() if col_profile and not pd.isna(row[col_profile]) else f"https://www.tiktok.com/@{uname}"
+            contact = str(row[col_contact]).strip() if col_contact and not pd.isna(row[col_contact]) else ""
 
             # Tỷ lệ tương tác
             er = 0.0
@@ -220,7 +222,24 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: b
             except Exception:
                 emb = []
 
-            # 3. Đóng gói Payload gửi sang Java Backend Deploy
+            # 3. Tính dataConfidence theo 4 thành phần quy đổi:
+            # Data Confidence = (35% x Nguồn) + (30% x Độ tươi) + (20% x Độ đầy đủ) + (15% x Hợp lý)
+            from app.core.confidence import compute_data_confidence
+            excel_conf = compute_data_confidence(
+                source_type="EXCEL_IMPORT",
+                observed_at=None,
+                avatar_url=avatar,
+                bio=f"Nhà sáng tạo nội dung {cat} - {niche}",
+                followers=f_count,
+                avg_views=views,
+                avg_likes=likes,
+                category=cat,
+                niche=niche,
+                contact=contact,
+                recent_posts=[],
+                er=er,
+            )
+
             java_payload = {
                 "platform": "TIKTOK",
                 "externalId": uname,
@@ -238,10 +257,10 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: b
                 "engagementRate": er,
                 "niche": niche,
                 "contentSummary": f"Nhà sáng tạo nội dung {cat} - {niche}",
-                "contact": "",
+                "contact": contact,
                 "category": cat,
                 "freshnessStatus": "FRESH",
-                "dataConfidence": 0.9,
+                "dataConfidence": excel_conf,
                 "recentPosts": [],
                 "embedding": emb,
             }

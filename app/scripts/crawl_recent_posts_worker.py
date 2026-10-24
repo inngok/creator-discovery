@@ -18,7 +18,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from app.ai.creator_classifier import classify_creator_type_smart
 from app.clients.java_client import java_client
 from app.core.logger import setup_logger
-from app.core.models import CreatorInfo, IngestPayload, Platform, Post
+from app.core.models import AIEnrichment, CreatorInfo, IngestPayload, Platform, Post
 from app.crawlers.tiktok_crawler import _init_playwright_context, _setup_network_interception
 from app.mappers.java_mapper import JavaMapper
 
@@ -53,7 +53,8 @@ def fetch_pending_creators(limit: int = 50) -> list[dict]:
     """Lấy danh sách các Creator trên Deploy DB chưa có bài post trong bảng post."""
     query = f"""
         SELECT c.id, c.external_id, c.user_name, c.display_name, c.avatar_url, c.profile_url, 
-               COALESCE(m.followers, 0), COALESCE(m.category, 'Lifestyle'), COALESCE(m.niche, 'General')
+               COALESCE(m.followers, 0), COALESCE(m.category, 'Lifestyle'), COALESCE(m.niche, 'General'),
+               COALESCE(m.contact, ''), COALESCE(m.content_summary, '')
         FROM creator c
         LEFT JOIN public_creator_metric m ON c.id = m.creator_id
         WHERE c.id NOT IN (SELECT DISTINCT creator_id FROM post)
@@ -84,6 +85,8 @@ def fetch_pending_creators(limit: int = 50) -> list[dict]:
                 "followers": int(r[6]) if r[6] else 0,
                 "category": str(r[7]) if r[7] else "Lifestyle",
                 "niche": str(r[8]) if r[8] else "General",
+                "contact": str(r[9]) if r[9] else "",
+                "contentSummary": str(r[10]) if r[10] else "",
             })
         conn.close()
         return creators
@@ -124,10 +127,10 @@ def delete_creator_from_db(creator_id: str, username: str, reason: str = "Tài k
         return False
 
 
-def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> tuple[list[Post], str | None]:
+def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> tuple[list[Post], str, str | None]:
     """
     Cào danh sách video gần đây từ TikTok.
-    Trả về: (posts, status_flag)
+    Trả về: (posts, signature, status_flag)
     status_flag:
       - None: bình thường
       - 'BLOCKED_CAPTCHA': TikTok bắt giải captcha hoặc chặn IP
@@ -153,7 +156,7 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> t
         # 1. KIỂM TRA CAPTCHA / BỊ CHẶN
         has_captcha_el = page.query_selector('#tiktok-verify-ele, .captcha_verify_container, [data-e2e="verify-bar"]')
         if has_captcha_el and has_captcha_el.is_visible():
-            return [], "BLOCKED_CAPTCHA"
+            return [], "", "BLOCKED_CAPTCHA"
 
         # 2. KIỂM TRA DỮ LIỆU GỐC TRÊN TRANG (Universal Data)
         soup_data = page.evaluate("() => document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent")
@@ -168,16 +171,24 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> t
         status_code = user_detail.get("statusCode", None)
         user_info = user_detail.get("userInfo", {}).get("user", {})
         is_secret = user_info.get("secret", False)
+        signature = user_info.get("signature", "")
+        if not signature:
+            try:
+                bio_el = page.query_selector('[data-e2e="user-bio"]')
+                if bio_el:
+                    signature = bio_el.inner_text().strip()
+            except Exception:
+                pass
 
         # 3. KIỂM TRA TÀI KHOẢN KHÔNG TỒN TẠI / BỊ XÓA
         not_found_el = page.query_selector('[data-e2e="user-not-found"]')
         if (not_found_el and not_found_el.is_visible()) or status_code in [10202, 10222, 10221]:
-            return [], "NOT_FOUND"
+            return [], "", "NOT_FOUND"
 
         # 4. KIỂM TRA TÀI KHOẢN RIÊNG TƯ (PRIVATE)
         private_el = page.query_selector('[data-e2e="user-private"]')
         if (private_el and private_el.is_visible()) or is_secret is True:
-            return [], "PRIVATE"
+            return [], "", "PRIVATE"
 
         # 5. CUỘN TRANG ĐỂ KÍCH HOẠT API ITEM_LIST
         for _ in range(3):
@@ -190,7 +201,7 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> t
         # Kiểm tra lại Captcha sau khi cuộn
         has_captcha_el = page.query_selector('#tiktok-verify-ele, .captcha_verify_container, [data-e2e="verify-bar"]')
         if has_captcha_el and has_captcha_el.is_visible():
-            return [], "BLOCKED_CAPTCHA"
+            return [], "", "BLOCKED_CAPTCHA"
 
         # 6. FALLBACK: NẾU NETWORK CHƯA KỊP BẮT, CÀO TRỰC TIẾP TỪ DOM
         if not recent_posts:
@@ -226,10 +237,10 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> t
                     postedAt=None,
                 ))
 
-        return recent_posts[:max_posts], None
+        return recent_posts[:max_posts], signature, None
     except Exception as e:
         logger.warning(f"Lỗi khi cào video cho @{clean_uname}: {e}")
-        return [], None
+        return [], "", None
     finally:
         try:
             page.close()
@@ -257,12 +268,12 @@ def run_worker(limit: int = 50, delay_min: float = 4.0, delay_max: float = 7.0):
             uname = cr["userName"]
             logger.info(f"[{idx}/{len(creators)}] Đang cào bài post cho: {uname} ({cr['followers']:,} followers)...")
 
-            recent_posts, status_flag = crawl_recent_posts_for_user(context, uname, max_posts=3)
+            recent_posts, live_bio, status_flag = crawl_recent_posts_for_user(context, uname, max_posts=3)
 
             # TRƯỜNG HỢP 1: BỊ TIKTOK CHẶN / CAPTCHA -> DỪNG NGAY
             if status_flag == "BLOCKED_CAPTCHA":
                 logger.error(
-                    f"\n[🛑 DỪNG CÀO NGAY LẬP TỨC] Phát hiện TikTok chặn và bắt giải Captcha tại kênh {uname}!"
+                    f"\n[DỪNG CÀO NGAY LẬP TỨC] Phát hiện TikTok chặn và bắt giải Captcha tại kênh {uname}!"
                 )
                 logger.error("[!] Worker tự động dừng để bảo vệ IP và tránh bị ban tài khoản.")
                 break
@@ -280,6 +291,28 @@ def run_worker(limit: int = 50, delay_min: float = 4.0, delay_max: float = 7.0):
             if recent_posts:
                 consecutive_empty = 0
 
+                bio_str = live_bio or cr.get("contentSummary", "")
+                contact_str = cr.get("contact", "")
+
+                # 1. Phân loại thông minh KOC vs KOL dựa trên nội dung video + bio + followers
+                smart_type = classify_creator_type_smart(
+                    username=uname,
+                    display_name=cr["displayName"],
+                    bio=bio_str,
+                    followers=cr["followers"],
+                    recent_posts=recent_posts,
+                    category=cr["category"],
+                    niche=cr["niche"],
+                )
+
+                # 2. Xây dựng AIEnrichment đầy đủ với đúng Category, Niche, và Smart Creator Type
+                ai_enrichment = AIEnrichment(
+                    category=cr["category"],
+                    niche=cr["niche"],
+                    creatorType=smart_type,
+                    contentSummary=bio_str or f"Nhà sáng tạo nội dung {cr['category']} - {cr['niche']}",
+                )
+
                 creator_info = CreatorInfo(
                     platform=Platform.TIKTOK,
                     externalId=cr["externalId"],
@@ -288,33 +321,31 @@ def run_worker(limit: int = 50, delay_min: float = 4.0, delay_max: float = 7.0):
                     profileUrl=cr["profileUrl"],
                     avatarUrl=cr["avatarUrl"],
                     followers=cr["followers"],
+                    bio=bio_str,
+                    publicEmail=contact_str if "@" in contact_str else None,
+                    publicPhone=contact_str if ("@" not in contact_str and contact_str) else None,
                 )
                 payload = IngestPayload(
                     creator=creator_info,
                     recentPosts=recent_posts,
-                    aiEnrichment=None,
+                    aiEnrichment=ai_enrichment,
                     source="BACKGROUND_RECENT_POSTS_WORKER",
                 )
-                java_data = JavaMapper.from_ingest_payload(payload)
 
-                # Phân loại thông minh KOC vs KOL dựa trên nội dung video + bio
-                smart_type = classify_creator_type_smart(
-                    username=uname,
-                    display_name=cr["displayName"],
-                    bio=cr.get("bio", ""),
-                    followers=cr["followers"],
-                    recent_posts=recent_posts,
-                    category=cr.get("category", ""),
-                    niche=cr.get("niche", ""),
-                )
-                java_data["creatorType"] = smart_type
-                java_data["category"] = cr["category"]
-                java_data["niche"] = cr["niche"]
+                # 3. JavaMapper tự động tính toán dataConfidence hoàn toàn động:
+                #    - Ngành/ngách thực tế (0.85 nếu cụ thể, 0.65 nếu chung chung)
+                #    - Thông tin liên hệ / booking trong bio (+0.10)
+                #    - Chỉ số tương tác thực tế (+0.05)
+                #    Đồng thời sinh vector BKAI chuẩn xác theo đúng nội dung bài post và chuyên mục!
+                java_data = JavaMapper.from_ingest_payload(payload)
 
                 ok = java_client.send_creator_data(java_data)
                 if ok:
                     success_count += 1
-                    logger.info(f"  [+] Thành công! Đã lưu {len(recent_posts)} bài post ({smart_type}) cho {uname} lên Deploy DB.")
+                    conf_val = java_data.get("dataConfidence", 0.0)
+                    logger.info(
+                        f"  [+] Thành công! Đã lưu {len(recent_posts)} bài post ({smart_type} | Conf: {conf_val}) cho {uname} lên Deploy DB."
+                    )
                 else:
                     logger.warning(f"  [-] Lỗi gửi bài post cho {uname} sang Deploy Backend.")
 

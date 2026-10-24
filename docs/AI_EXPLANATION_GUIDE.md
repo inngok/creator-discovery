@@ -126,21 +126,42 @@ $$\text{semanticMatchScore} = \text{similarityScore} \times 100$$
 
 ## 3. Công Thức Độ Tin Cậy Dữ Liệu (`dataConfidence`)
 
-Trường `dataConfidence` (trong `java_mapper.py`) phản ánh độ tin cậy và mức độ đầy đủ của dữ liệu vừa cào được trước khi đẩy sang Java Backend:
+Trường `dataConfidence` (trong `java_mapper.py` và `import_and_crawl_excel.py`) phản ánh độ tin cậy và chất lượng thực tế của hồ sơ Creator thông qua **4 trục tiêu chí định lượng (Trọng số 100%)**:
 
-$$\text{dataConfidence} = \text{Base} + \sum \text{Bonus Scores}$$
+$$\text{Data Confidence} = (35\% \times \text{Nguồn}) + (30\% \times \text{Độ tươi}) + (20\% \times \text{Độ đầy đủ}) + (15\% \times \text{Hợp lý})$$
 
-- **Mức cơ sở (Base)**: $0.50$
-- **Điểm cộng chất lượng dữ liệu cào**:
-  - Số lượng bài đăng gần nhất:
-    - $\ge 3$ bài: **$+0.20$**
-    - $1 \div 2$ bài: **$+0.10$**
-    - $0$ bài: **$+0.00$**
-  - Có số liệu tương tác thực tế ($\text{avgViews} > 0$ hoặc $\text{avgLikes} > 0$): **$+0.10$**
-  - Hồ sơ đầy đủ (có bio và ảnh đại diện): **$+0.10$**
-  - Phân loại AI thành công (`category` $\neq$ `UNKNOWN` và `niche` $\neq$ `UNKNOWN`): **$+0.10$**
+### 4 Thành phần quy đổi định lượng ($0.0 \div 1.0$):
 
-$$\text{dataConfidence} \in [0.50, 1.00]$$
+1. **Nguồn dữ liệu ($\text{Nguồn} - 35\%$)**:
+   - **$1.00$**: API chính thức của nền tảng (`OFFICIAL_API`, `TIKTOK_API`, `INSTAGRAM_GRAPH_API`, `YOUTUBE_DATA_API`).
+   - **$0.85$**: Creator tự xác minh tài khoản (`AUTHORIZED`, `CLAIMED`, `OAUTH`).
+   - **$0.70$**: Cào Web Public tự động (`PUBLIC`, `WEB_CRAWL`, `PLAYWRIGHT_STEALTH`, `EXCEL_IMPORT`).
+   - **$0.40$**: AI suy luận / Fallback / Chưa xác định.
+
+2. **Độ tươi dữ liệu ($\text{Độ tươi} - 30\%$)**:
+   - **$1.00$**: Dữ liệu mới cập nhật $\le 7$ ngày.
+   - **$0.50 \div 1.00$**: Cập nhật từ $7 \div 30$ ngày (nội suy tuyến tính theo số ngày).
+   - **$0.20$**: Quá $30$ ngày (`STALE` - kích hoạt cơ chế cào lại để làm mới).
+
+3. **Độ đầy đủ trường thông tin ($\text{Độ đầy đủ} - 20\%$)**:
+   - Tỷ lệ các trường quan trọng không bị `NULL` hoặc rỗng (Avatar, Bio, Followers $> 0$, Avg Views $> 0$, Avg Likes $> 0$, Category/Niche cụ thể, Thông tin liên hệ).
+   $$\text{Độ đầy đủ} = \frac{\text{Số trường hợp lệ}}{7}$$
+
+4. **Tính hợp lý dữ liệu ($\text{Hợp lý} - 15\%$)**:
+   - Khởi tạo **$1.00$**, trừ **$0.25$** cho mỗi lỗi dị thường phát hiện được:
+     - Tỷ lệ tương tác ảo ($\text{ER} > 50\%$ hoặc $\text{ER} = 0\%$ khi đã có bài viết).
+     - Lượt xem lệch phi logic so với followers ($\text{avgViews} > \text{followers} \times 100$ hoặc $\text{avgViews} = 0$ mà $\text{avgLikes} > 1,000$).
+     - $\text{followers} \le 0$.
+     - Chưa có bài đăng nào trên kênh ($\text{recentPosts}$ rỗng).
+   $$\text{Hợp lý} = \max\left(0.0, 1.0 - \sum \text{penalties}\right)$$
+
+### Phân loại nghiệp vụ theo thang điểm $\text{dataConfidence} \in [0.0, 1.0]$:
+
+| Mức điểm | Đánh giá chất lượng | Hành động nghiệp vụ hệ thống |
+| :---: | :--- | :--- |
+| **$\ge 0.85$** | Dữ liệu xuất sắc (Đầy đủ tương tác, có liên hệ, số liệu tươi mới) | Tự động duyệt, đưa vào danh sách đề xuất ưu tiên |
+| **$0.70 \div 0.84$** | Dữ liệu đạt chuẩn (Cào web public đầy đủ thông số cơ bản) | Tự động duyệt, lưu trữ phục vụ tìm kiếm |
+| **$< 0.70$** | Dữ liệu sơ cấp / Thiếu trường / Lỗi dị thường / Quá hạn 30 ngày | Đưa vào hàng đợi **Data Manager Review Queue** để duyệt thủ công hoặc kích cào lại |
 
 ---
 

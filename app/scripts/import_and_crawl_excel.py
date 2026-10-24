@@ -209,7 +209,7 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: b
                 combined_text=combined_text,
                 category=cat,
                 niche=niche,
-                creator_type="KOL" if f_count >= 50000 else "KOC",
+                creator_type="KOL" if f_count >= 500000 else "KOC",
                 followers=f_count,
                 source="EXCEL_IMPORT",
             )
@@ -227,7 +227,7 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: b
                 "userName": f"@{uname}",
                 "displayName": d_name,
                 "avatarUrl": avatar,
-                "creatorType": "KOL" if f_count >= 50000 else "KOC",
+                "creatorType": "KOL" if f_count >= 500000 else "KOC",
                 "location": "Vietnam",
                 "profileUrl": p_url,
                 "followers": f_count,

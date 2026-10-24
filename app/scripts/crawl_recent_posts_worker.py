@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import random
 import re
@@ -14,6 +15,7 @@ load_dotenv()
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+from app.ai.creator_classifier import classify_creator_type_smart
 from app.clients.java_client import java_client
 from app.core.logger import setup_logger
 from app.core.models import CreatorInfo, IngestPayload, Platform, Post
@@ -58,7 +60,6 @@ def fetch_pending_creators(limit: int = 50) -> list[dict]:
         ORDER BY m.followers DESC
         {"LIMIT " + str(limit) if limit > 0 else ""};
     """
-    # 1. Thử kết nối trực tiếp PostgreSQL bằng psycopg2
     try:
         import psycopg2
         conn = psycopg2.connect(
@@ -87,44 +88,52 @@ def fetch_pending_creators(limit: int = 50) -> list[dict]:
         conn.close()
         return creators
     except Exception as e:
-        logger.warning(f"[!] Lỗi kết nối psycopg2 trực tiếp: {e}. Thử fallback sang Docker...")
-
-    # 2. Fallback sang docker exec psql nếu có
-    try:
-        import subprocess
-        cmd = [
-            "docker", "exec", "-e", "PGPASSWORD=12345", "influencermatch_postgres",
-            "psql", "-h", "221.121.3.226", "-U", "influencermatch_user", "-d", "influencermatch_dev",
-            "-t", "-A", "-F", "|",
-            "-c", query,
-        ]
-        output = subprocess.check_output(cmd).decode("utf-8")
-        creators = []
-        for line in output.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split("|")
-            if len(parts) >= 9:
-                creators.append({
-                    "id": parts[0],
-                    "externalId": parts[1],
-                    "userName": parts[2],
-                    "displayName": parts[3],
-                    "avatarUrl": parts[4],
-                    "profileUrl": parts[5],
-                    "followers": int(parts[6]) if parts[6].isdigit() else 0,
-                    "category": parts[7],
-                    "niche": parts[8],
-                })
-        return creators
-    except Exception as e:
         logger.error(f"[-] Lỗi khi query danh sách creator từ Deploy DB: {e}")
         return []
 
 
-def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> list[Post]:
-    """Cào danh sách video gần đây từ trang profile TikTok bằng Network Interception + Fallback."""
+def delete_creator_from_db(creator_id: str, username: str, reason: str = "Tài khoản riêng tư / Không tồn tại") -> bool:
+    """Xóa hoàn toàn Creator không hợp lệ (Riêng tư / Đã xóa) khỏi Database Deploy."""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host="221.121.3.226",
+            user="influencermatch_user",
+            password="12345",
+            dbname="influencermatch_dev",
+            connect_timeout=10,
+        )
+        cur = conn.cursor()
+        # Xóa các ràng buộc bảng liên quan
+        cur.execute("DELETE FROM public_creator_metric WHERE creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM post WHERE creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM shortlist_item WHERE creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM relationship WHERE creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM collaboration WHERE creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM creator_claim WHERE creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM creator_invitation WHERE target_creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM creator_provider_identity WHERE creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM creator_account_verification WHERE creator_id = %s;", (creator_id,))
+        cur.execute("DELETE FROM creator WHERE id = %s;", (creator_id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"  [XÓA CREATOR] Đã xóa {username} khỏi DB (Lý do: {reason}).")
+        return True
+    except Exception as e:
+        logger.error(f"  [-] Lỗi khi xóa {username} khỏi DB: {e}")
+        return False
+
+
+def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> tuple[list[Post], str | None]:
+    """
+    Cào danh sách video gần đây từ TikTok.
+    Trả về: (posts, status_flag)
+    status_flag:
+      - None: bình thường
+      - 'BLOCKED_CAPTCHA': TikTok bắt giải captcha hoặc chặn IP
+      - 'PRIVATE': Tài khoản riêng tư
+      - 'NOT_FOUND': Tài khoản không tồn tại / đã xóa / bị ban
+    """
     clean_uname = username.strip().removeprefix("@")
     url = f"https://www.tiktok.com/@{clean_uname}"
     page = context.new_page()
@@ -133,23 +142,44 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> l
         stealth = Stealth()
         stealth.apply_stealth_sync(page)
 
-        # 1. Bắt gói tin API item_list trả về từ TikTok
         recent_posts = _setup_network_interception(page, clean_uname)
 
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            try:
-                page.wait_for_selector(
-                    '#__UNIVERSAL_DATA_FOR_REHYDRATION__, [data-e2e="user-title"]',
-                    timeout=10000,
-                )
-            except Exception:
-                pass
             page.wait_for_timeout(2000)
         except Exception as e:
             logger.warning(f"Timeout khi mở profile @{clean_uname}: {e}")
 
-        # 2. Cuộn trang 2-3 lần để TikTok gửi request API nạp video
+        # 1. KIỂM TRA CAPTCHA / BỊ CHẶN
+        has_captcha_el = page.query_selector('#tiktok-verify-ele, .captcha_verify_container, [data-e2e="verify-bar"]')
+        if has_captcha_el and has_captcha_el.is_visible():
+            return [], "BLOCKED_CAPTCHA"
+
+        # 2. KIỂM TRA DỮ LIỆU GỐC TRÊN TRANG (Universal Data)
+        soup_data = page.evaluate("() => document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent")
+        user_detail = {}
+        if soup_data:
+            try:
+                d = json.loads(soup_data)
+                user_detail = d.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {})
+            except Exception:
+                pass
+
+        status_code = user_detail.get("statusCode", None)
+        user_info = user_detail.get("userInfo", {}).get("user", {})
+        is_secret = user_info.get("secret", False)
+
+        # 3. KIỂM TRA TÀI KHOẢN KHÔNG TỒN TẠI / BỊ XÓA
+        not_found_el = page.query_selector('[data-e2e="user-not-found"]')
+        if (not_found_el and not_found_el.is_visible()) or status_code in [10202, 10222, 10221]:
+            return [], "NOT_FOUND"
+
+        # 4. KIỂM TRA TÀI KHOẢN RIÊNG TƯ (PRIVATE)
+        private_el = page.query_selector('[data-e2e="user-private"]')
+        if (private_el and private_el.is_visible()) or is_secret is True:
+            return [], "PRIVATE"
+
+        # 5. CUỘN TRANG ĐỂ KÍCH HOẠT API ITEM_LIST
         for _ in range(3):
             if len(recent_posts) >= max_posts:
                 break
@@ -157,7 +187,12 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> l
             page.evaluate(f"window.scrollBy(0, {scroll_amount});")
             page.wait_for_timeout(2500)
 
-        # 3. Fallback: Nếu không bắt được qua Network, quét bằng DOM
+        # Kiểm tra lại Captcha sau khi cuộn
+        has_captcha_el = page.query_selector('#tiktok-verify-ele, .captcha_verify_container, [data-e2e="verify-bar"]')
+        if has_captcha_el and has_captcha_el.is_visible():
+            return [], "BLOCKED_CAPTCHA"
+
+        # 6. FALLBACK: NẾU NETWORK CHƯA KỊP BẮT, CÀO TRỰC TIẾP TỪ DOM
         if not recent_posts:
             soup = BeautifulSoup(page.content(), "html.parser")
             cards = soup.select('[data-e2e="user-post-item"]')
@@ -191,10 +226,10 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> l
                     postedAt=None,
                 ))
 
-        return recent_posts[:max_posts]
+        return recent_posts[:max_posts], None
     except Exception as e:
         logger.warning(f"Lỗi khi cào video cho @{clean_uname}: {e}")
-        return []
+        return [], None
     finally:
         try:
             page.close()
@@ -202,7 +237,7 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> l
             pass
 
 
-def run_worker(limit: int = 50, delay_min: float = 3.0, delay_max: float = 6.0):
+def run_worker(limit: int = 50, delay_min: float = 4.0, delay_max: float = 7.0):
     logger.info(f"[*] Bắt đầu Worker cào Recent Posts (Limit: {limit} creators)...")
     creators = fetch_pending_creators(limit)
     logger.info(f"[+] Tìm thấy {len(creators)} Creator chưa có bài post trên Deploy DB.")
@@ -212,19 +247,39 @@ def run_worker(limit: int = 50, delay_min: float = 3.0, delay_max: float = 6.0):
         return
 
     success_count = 0
+    deleted_count = 0
+    consecutive_empty = 0
 
     with sync_playwright() as p:
-        # Nạp session cookie chuẩn từ data/playwright_state.json
         context, state_path = _init_playwright_context(p)
 
         for idx, cr in enumerate(creators, 1):
             uname = cr["userName"]
             logger.info(f"[{idx}/{len(creators)}] Đang cào bài post cho: {uname} ({cr['followers']:,} followers)...")
 
-            recent_posts = crawl_recent_posts_for_user(context, uname, max_posts=3)
+            recent_posts, status_flag = crawl_recent_posts_for_user(context, uname, max_posts=3)
 
+            # TRƯỜNG HỢP 1: BỊ TIKTOK CHẶN / CAPTCHA -> DỪNG NGAY
+            if status_flag == "BLOCKED_CAPTCHA":
+                logger.error(
+                    f"\n[🛑 DỪNG CÀO NGAY LẬP TỨC] Phát hiện TikTok chặn và bắt giải Captcha tại kênh {uname}!"
+                )
+                logger.error("[!] Worker tự động dừng để bảo vệ IP và tránh bị ban tài khoản.")
+                break
+
+            # TRƯỜNG HỢP 2: TÀI KHOẢN RIÊNG TƯ HOẶC ĐÃ BỊ XÓA -> XÓA LUÔN KHỎI DB
+            if status_flag in ["PRIVATE", "NOT_FOUND"]:
+                reason_text = "Tài khoản riêng tư (Private)" if status_flag == "PRIVATE" else "Tài khoản không tồn tại / Đã xóa"
+                delete_creator_from_db(cr["id"], uname, reason=reason_text)
+                deleted_count += 1
+                consecutive_empty = 0
+                time.sleep(1.5)
+                continue
+
+            # TRƯỜNG HỢP 3: LẤY ĐƯỢC BÀI POST THÀNH CÔNG
             if recent_posts:
-                # Đóng gói IngestPayload gửi sang Deploy Backend
+                consecutive_empty = 0
+
                 creator_info = CreatorInfo(
                     platform=Platform.TIKTOK,
                     externalId=cr["externalId"],
@@ -241,41 +296,61 @@ def run_worker(limit: int = 50, delay_min: float = 3.0, delay_max: float = 6.0):
                     source="BACKGROUND_RECENT_POSTS_WORKER",
                 )
                 java_data = JavaMapper.from_ingest_payload(payload)
-                # Giữ nguyên category & niche sẵn có, gán creatorType hợp lệ để backend chấp nhận
-                java_data["creatorType"] = "KOL" if cr["followers"] >= 50000 else "KOC"
+
+                # Phân loại thông minh KOC vs KOL dựa trên nội dung video + bio
+                smart_type = classify_creator_type_smart(
+                    username=uname,
+                    display_name=cr["displayName"],
+                    bio=cr.get("bio", ""),
+                    followers=cr["followers"],
+                    recent_posts=recent_posts,
+                    category=cr.get("category", ""),
+                    niche=cr.get("niche", ""),
+                )
+                java_data["creatorType"] = smart_type
                 java_data["category"] = cr["category"]
                 java_data["niche"] = cr["niche"]
 
                 ok = java_client.send_creator_data(java_data)
                 if ok:
                     success_count += 1
-                    logger.info(f"  [+] Thành công! Đã lưu {len(recent_posts)} bài post cho {uname} lên Deploy DB.")
+                    logger.info(f"  [+] Thành công! Đã lưu {len(recent_posts)} bài post ({smart_type}) cho {uname} lên Deploy DB.")
                 else:
                     logger.warning(f"  [-] Lỗi gửi bài post cho {uname} sang Deploy Backend.")
-            else:
-                logger.warning(f"  [!] Không tìm thấy bài post cho {uname} (có thể bị TikTok hạn chế hoặc tài khoản riêng tư).")
 
-            # Cập nhật lại session định kỳ
+            else:
+                consecutive_empty += 1
+                logger.warning(f"  [!] Không tìm thấy bài post cho {uname} (Lần rỗng liên tiếp: {consecutive_empty}/4).")
+
+                # Nếu bị rỗng liên tiếp 4 kênh công khai -> Nghi ngờ TikTok rate-limit IP
+                if consecutive_empty >= 4:
+                    logger.error(
+                        "\n[🛑 DỪNG CÀO] 4 kênh công khai liên tiếp không tải được video (TikTok rate-limit IP / chặn mạng)."
+                    )
+                    logger.error("[!] Tự động dừng cào để tránh bị TikTok blacklist IP.")
+                    break
+
+            # Cập nhật session định kỳ
             try:
                 context.storage_state(path=state_path)
             except Exception:
                 pass
 
-            # Nghỉ ngơi giữa các profile để tránh bị TikTok chặn bot
             sleep_sec = random.uniform(delay_min, delay_max)
             time.sleep(sleep_sec)
 
         context.browser.close()
 
-    logger.info(f"\n[V] HOÀN TẤT! Đã cào và lưu bài post cho {success_count}/{len(creators)} Creator.")
+    logger.info(f"\n[V] HOÀN TẤT PHIÊN LÀM VIỆC!")
+    logger.info(f" - Đã lưu bài post thành công: {success_count} Creator")
+    logger.info(f" - Đã xóa Creator riêng tư/hỏng: {deleted_count} Creator")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Worker chạy ngầm cào Recent Posts cho các Creator trên Deploy DB")
-    parser.add_argument("--limit", "-l", type=int, default=50, help="Số lượng Creator cần cào (0 = tất cả)")
-    parser.add_argument("--min-delay", type=float, default=3.0, help="Thời gian nghỉ tối thiểu giữa các kênh (giây)")
-    parser.add_argument("--max-delay", type=float, default=6.0, help="Thời gian nghỉ tối đa giữa các kênh (giây)")
+    parser.add_argument("--limit", "-l", type=int, default=0, help="Số lượng Creator cần cào (0 = tất cả)")
+    parser.add_argument("--min-delay", type=float, default=4.0, help="Thời gian nghỉ tối thiểu giữa các kênh (giây)")
+    parser.add_argument("--max-delay", type=float, default=7.0, help="Thời gian nghỉ tối đa giữa các kênh (giây)")
     args = parser.parse_args()
 
     run_worker(limit=args.limit, delay_min=args.min_delay, delay_max=args.max_delay)
-

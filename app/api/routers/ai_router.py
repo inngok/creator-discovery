@@ -1,11 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.ai.analyzer import process_ai_enrichment
-from app.ai.services.embedding_service import embedding_service
 from app.ai.services.explanation_service import ExplanationInput, generate_explanation
 from app.core.models import IngestPayload
-from app.workers.tasks import run_retrain_pipeline
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI"])
 
@@ -29,6 +26,14 @@ class ExplainRequest(BaseModel):
     campaignBrief: str = Field(default="", description="Mô tả campaign brief")
     contentSummary: str = Field(default="")
     topTags: list[str] = Field(default_factory=list)
+    minFollowers: int | None = Field(default=None, ge=0, description="Follower tối thiểu theo yêu cầu chiến dịch")
+    maxFollowers: int | None = Field(default=None, ge=0, description="Follower tối đa theo yêu cầu chiến dịch")
+    targetFollowers: int | None = Field(default=None, ge=0, description="Mục tiêu follower cụ thể của chiến dịch")
+
+    model_config = {
+        "populate_by_name": True,
+        "extra": "ignore",
+    }
 
 
 @router.post("/embed")
@@ -39,6 +44,8 @@ async def embed_search_query(req: EmbedRequest):
     if not req.text or not req.text.strip():
         raise HTTPException(status_code=400, detail="Văn bản không được để trống")
     try:
+        from app.ai.services.embedding_service import embedding_service
+
         vector = embedding_service.get_search_embedding(req.text.strip())
         return {
             "status": "success",
@@ -72,6 +79,9 @@ async def explain_creator_recommendation(req: ExplainRequest):
             campaign_brief=req.campaignBrief,
             content_summary=req.contentSummary,
             top_tags=req.topTags,
+            target_followers=req.targetFollowers,
+            min_followers=req.minFollowers,
+            max_followers=req.maxFollowers,
         )
         result = generate_explanation(data)
         return {
@@ -86,6 +96,8 @@ async def explain_creator_recommendation(req: ExplainRequest):
 async def trigger_ai_retrain():
     """API để chạy Manual kịch bản Data Flywheel (Cập nhật từ khóa mới cho AI)."""
     try:
+        from app.workers.tasks import run_retrain_pipeline
+
         # Đưa vào Celery Worker chạy ngầm để không làm treo API request
         run_retrain_pipeline.delay()
         return {
@@ -107,6 +119,8 @@ async def enrich_creator_ai(payload: IngestPayload):
     và chạy phân loại ngành nghề (Category), Niche, Creator Type và Sentiment qua AI.
     """
     try:
+        from app.ai.analyzer import process_ai_enrichment
+
         enrichment = process_ai_enrichment(payload.creator, payload.recentPosts)
         payload.aiEnrichment = enrichment
         return payload

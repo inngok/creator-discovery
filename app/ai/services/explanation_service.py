@@ -83,40 +83,58 @@ def _calculate_engagement_score(
 ) -> tuple[float, str]:
     """
     Tiêu chí 1: engagementScore
-    - Nền tảng video ngắn (TikTok, Reels, Shorts): Ưu tiên tính theo View-based Engagement Rate (ER_views)
-      ER_views = (avgLikes + avgComments + avgShares) / avgViews * 100%
-      Benchmark chuẩn video ngắn: 5.0%
-    - Nền tảng truyền thống / Không có views: So sánh với Follower-based ER benchmark theo Tier.
+    - Nền tảng video ngắn (TikTok, Reels, Shorts): Tự động chia cho chuẩn 5.0%.
+      Ưu tiên tính theo View-based Engagement Rate (ER_views).
+      Nếu có avg_views > 0 và avg_likes > 0, tự động tính computed_er_views = (avg_likes / avg_views) * 100%.
+      Nếu không có dữ liệu lượt xem, dùng trực tiếp engagementRate (rate) chia cho chuẩn 5.0%.
+    - Nền tảng truyền thống (Facebook, YouTube bài dài, Instagram feed...):
+      Chia cho Benchmark Tier chuẩn theo quy mô Followers:
+      Nano (<10k): 4.5%, Micro (10k-100k): 3.0%, Macro (100k-1M): 2.0%, Mega (>1M): 1.2%.
     """
-    is_short_video = str(platform or "").upper() in {"TIKTOK", "REELS", "SHORTS", "YOUTUBE_SHORTS"}
+    p_upper = str(platform or "").upper().strip()
+    is_short_video = (
+        "TIKTOK" in p_upper
+        or "REEL" in p_upper
+        or "SHORT" in p_upper
+    )
 
-    computed_er_views = er_views
-    if computed_er_views is None and avg_views > 0 and avg_likes > 0:
-        computed_er_views = (avg_likes / avg_views) * 100.0
+    if is_short_video:
+        benchmark = 5.0  # Chuẩn 5.0% cho video ngắn (TikTok, Reels, Shorts)
+        computed_er_views = er_views
+        if computed_er_views is None and avg_views > 0 and avg_likes > 0:
+            computed_er_views = (avg_likes / avg_views) * 100.0
 
-    if is_short_video and computed_er_views is not None and computed_er_views > 0:
-        benchmark = 5.0  # Benchmark chuẩn video ngắn
-        score = min(100.0, (computed_er_views / benchmark) * 100.0)
-        score = round(score, 1)
-        if computed_er_views >= benchmark:
-            reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) vượt chuẩn {benchmark}% của video ngắn."
-        elif score >= 70.0:
-            reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) duy trì tốt, đạt mức ổn định của video ngắn."
+        effective_rate = computed_er_views if (computed_er_views is not None and computed_er_views > 0) else rate
+        score = min(100.0, (effective_rate / benchmark) * 100.0) if benchmark > 0 else 50.0
+        score = round(max(0.0, score), 1)
+
+        if computed_er_views is not None and computed_er_views > 0:
+            if computed_er_views >= benchmark:
+                reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) vượt chuẩn {benchmark}% của video ngắn."
+            elif score >= 70.0:
+                reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) duy trì tốt, đạt mức ổn định của video ngắn."
+            else:
+                reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) ở mức vừa phải."
         else:
-            reason = f"Tỷ lệ tương tác theo lượt xem ({computed_er_views:.1f}%) ở mức vừa phải."
+            if effective_rate >= benchmark:
+                reason = f"Tỷ lệ tương tác {effective_rate:.1f}% vượt chuẩn {benchmark}% của nền tảng video ngắn."
+            elif score >= 70.0:
+                reason = f"Tỷ lệ tương tác {effective_rate:.1f}% duy trì tốt, bám sát chuẩn {benchmark}% của video ngắn."
+            else:
+                reason = f"Tỷ lệ tương tác {effective_rate:.1f}% ở mức vừa phải trên nền tảng video ngắn."
         return score, reason
 
-    # Fallback Follower-based ER theo Tier
+    # Nền tảng truyền thống: So sánh với Follower-based ER benchmark theo Tier
     tier_label, benchmark, _ = _tier_info(followers)
     score = min(100.0, (rate / benchmark) * 100.0) if benchmark > 0 else 50.0
-    score = round(score, 1)
+    score = round(max(0.0, score), 1)
 
     if rate >= benchmark:
-        reason = f"Tỷ lệ tương tác {rate:.1f}% vượt trội so với mặt bằng chung của các kênh cùng quy mô."
+        reason = f"Tỷ lệ tương tác {rate:.1f}% vượt trội so với mặt bằng chung của các kênh cùng quy mô ({benchmark}%)."
     elif score >= 70.0:
-        reason = f"Tỷ lệ tương tác {rate:.1f}% duy trì ổn định, bám sát mức trung bình của các kênh cùng quy mô."
+        reason = f"Tỷ lệ tương tác {rate:.1f}% duy trì ổn định, bám sát mức trung bình của các kênh cùng quy mô ({benchmark}%)."
     else:
-        reason = f"Tỷ lệ tương tác {rate:.1f}% ở mức vừa phải so với các kênh cùng quy mô."
+        reason = f"Tỷ lệ tương tác {rate:.1f}% ở mức vừa phải so với các kênh cùng quy mô ({benchmark}%)."
     return score, reason
 
 
@@ -133,13 +151,17 @@ def _calculate_follower_score(
     Đánh giá độ tối ưu của phân khúc quy mô người theo dõi.
     Sử dụng thang đo Logarithm (log10) và phạt phi đối xứng (Asymmetric Penalty)
     để khắc phục lỗi phạt dốc rớt về 0 khi Followers vượt quá Target.
+    Chặn sàn 60đ khi vượt max / target, chặn sàn 0đ khi thiếu hụt.
     """
     import math
 
     fl = max(1, followers)
 
     # 1. Trường hợp có khoảng mục tiêu [min_followers, max_followers]
-    if min_followers and max_followers and min_followers <= max_followers:
+    has_min = min_followers is not None and min_followers > 0
+    has_max = max_followers is not None and max_followers > 0
+
+    if has_min and has_max and min_followers <= max_followers:
         if min_followers <= fl <= max_followers:
             return 100.0, f"Lượng theo dõi {followers:,} người nằm trọn vẹn trong khoảng mục tiêu ({min_followers:,} - {max_followers:,})."
         elif fl < min_followers:
@@ -147,13 +169,29 @@ def _calculate_follower_score(
             score = round(max(0.0, 100.0 - penalty), 1)
             return score, f"Lượng theo dõi {followers:,} người thấp hơn mức tối thiểu ({min_followers:,}) của chiến dịch."
         else:
-            # Vượt max: phạt nhẹ (hệ số 30, sàn 60.0) vì kênh lớn vẫn mang lại độ phủ
+            # Vượt max: phạt phi đối xứng (hệ số 30, sàn 60.0) vì kênh lớn vẫn mang lại độ phủ
+            penalty = (math.log10(fl) - math.log10(max_followers)) * 30.0
+            score = round(max(60.0, 100.0 - penalty), 1)
+            return score, f"Lượng theo dõi {followers:,} người vượt mức tối đa ({max_followers:,}), gia tăng độ phủ lớn cho chiến dịch."
+
+    elif has_min and not has_max:
+        if fl >= min_followers:
+            return 100.0, f"Lượng theo dõi {followers:,} người đạt yêu cầu tối thiểu ({min_followers:,}) của chiến dịch."
+        else:
+            penalty = (math.log10(min_followers) - math.log10(fl)) * 50.0
+            score = round(max(0.0, 100.0 - penalty), 1)
+            return score, f"Lượng theo dõi {followers:,} người thấp hơn mức tối thiểu ({min_followers:,}) của chiến dịch."
+
+    elif has_max and not has_min:
+        if fl <= max_followers:
+            return 100.0, f"Lượng theo dõi {followers:,} người nằm trong giới hạn tối đa ({max_followers:,}) của chiến dịch."
+        else:
             penalty = (math.log10(fl) - math.log10(max_followers)) * 30.0
             score = round(max(60.0, 100.0 - penalty), 1)
             return score, f"Lượng theo dõi {followers:,} người vượt mức tối đa ({max_followers:,}), gia tăng độ phủ lớn cho chiến dịch."
 
     # 2. Trường hợp có mục tiêu cụ thể target_followers
-    if target_followers and target_followers > 0:
+    if target_followers is not None and target_followers > 0:
         if fl == target_followers:
             return 100.0, f"Lượng theo dõi {followers:,} người khớp chính xác mục tiêu ({target_followers:,})."
         elif fl < target_followers:
@@ -161,9 +199,9 @@ def _calculate_follower_score(
             score = round(max(0.0, 100.0 - penalty), 1)
             return score, f"Lượng theo dõi {followers:,} người đạt {score} điểm so với mục tiêu ({target_followers:,})."
         else:
-            # Vượt target: phạt nhẹ (hệ số 30, sàn 50.0), không bao giờ rơi về 0
+            # Vượt target: phạt phi đối xứng (hệ số 30, sàn 60.0), không bao giờ rơi về 0
             penalty = (math.log10(fl) - math.log10(target_followers)) * 30.0
-            score = round(max(50.0, 100.0 - penalty), 1)
+            score = round(max(60.0, 100.0 - penalty), 1)
             return score, f"Lượng theo dõi {followers:,} người vượt mục tiêu ({target_followers:,}), giúp khuếch đại độ phủ thương hiệu."
 
     # 3. Trường hợp không có Target cụ thể -> Dùng phân khúc Tier chuẩn
@@ -286,10 +324,12 @@ def generate_explanation(data: ExplanationInput) -> ExplanationOutput:
     reasons.append(fol_reason)
 
     # 3. semanticMatchScore
-    if data.similarity_score > 0:
+    if data.similarity_score is not None and data.similarity_score > 0:
         sem_score, sem_reason = _calculate_semantic_score(data.similarity_score)
         score_breakdown["semanticMatchScore"] = sem_score
         reasons.append(sem_reason)
+    else:
+        score_breakdown["semanticMatchScore"] = 0.0
 
     # 4. nicheMatchScore
     niche_score, niche_reason = _calculate_niche_score(data)

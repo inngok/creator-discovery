@@ -49,15 +49,19 @@ def parse_stat(val: str) -> int:
     return int(clean) if clean else 0
 
 
-def fetch_pending_creators(limit: int = 50) -> list[dict]:
-    """Lấy danh sách các Creator trên Deploy DB chưa có bài post trong bảng post."""
+def fetch_pending_creators(limit: int = 50, shortlist_only: bool = False) -> list[dict]:
+    """Lấy danh sách các Creator trên Deploy DB chưa có bài post trong bảng post (hoặc chỉ trong Shortlist)."""
+    where_clause = "WHERE c.id NOT IN (SELECT DISTINCT creator_id FROM post)"
+    if shortlist_only:
+        where_clause += " AND c.id IN (SELECT DISTINCT creator_id FROM shortlist_item)"
+
     query = f"""
         SELECT c.id, c.external_id, c.user_name, c.display_name, c.avatar_url, c.profile_url, 
                COALESCE(m.followers, 0), COALESCE(m.category, 'Lifestyle'), COALESCE(m.niche, 'General'),
                COALESCE(m.contact, ''), COALESCE(m.content_summary, '')
         FROM creator c
         LEFT JOIN public_creator_metric m ON c.id = m.creator_id
-        WHERE c.id NOT IN (SELECT DISTINCT creator_id FROM post)
+        {where_clause}
         ORDER BY m.followers DESC
         {"LIMIT " + str(limit) if limit > 0 else ""};
     """
@@ -248,13 +252,14 @@ def crawl_recent_posts_for_user(context, username: str, max_posts: int = 3) -> t
             pass
 
 
-def run_worker(limit: int = 50, delay_min: float = 4.0, delay_max: float = 7.0):
-    logger.info(f"[*] Bắt đầu Worker cào Recent Posts (Limit: {limit} creators)...")
-    creators = fetch_pending_creators(limit)
-    logger.info(f"[+] Tìm thấy {len(creators)} Creator chưa có bài post trên Deploy DB.")
+def run_worker(limit: int = 50, delay_min: float = 4.0, delay_max: float = 7.0, shortlist_only: bool = False):
+    target_desc = "các Creator trong Shortlist" if shortlist_only else "tất cả Creator chưa có post"
+    logger.info(f"[*] Bắt đầu Worker cào Recent Posts cho {target_desc} (Limit: {limit})...")
+    creators = fetch_pending_creators(limit, shortlist_only=shortlist_only)
+    logger.info(f"[+] Tìm thấy {len(creators)} Creator cần cào trên Deploy DB.")
 
     if not creators:
-        logger.info("[V] Tất cả Creator đều đã có bài post! Hoàn thành.")
+        logger.info(f"[V] Không có Creator nào thuộc diện cần cào ({target_desc})! Hoàn thành.")
         return
 
     success_count = 0
@@ -380,8 +385,10 @@ def run_worker(limit: int = 50, delay_min: float = 4.0, delay_max: float = 7.0):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Worker chạy ngầm cào Recent Posts cho các Creator trên Deploy DB")
     parser.add_argument("--limit", "-l", type=int, default=0, help="Số lượng Creator cần cào (0 = tất cả)")
+    parser.add_argument("--shortlist-only", "-s", action="store_true", help="Chỉ cào các Creator đang nằm trong Shortlist")
     parser.add_argument("--min-delay", type=float, default=4.0, help="Thời gian nghỉ tối thiểu giữa các kênh (giây)")
     parser.add_argument("--max-delay", type=float, default=7.0, help="Thời gian nghỉ tối đa giữa các kênh (giây)")
     args = parser.parse_args()
 
-    run_worker(limit=args.limit, delay_min=args.min_delay, delay_max=args.max_delay)
+    run_worker(limit=args.limit, delay_min=args.min_delay, delay_max=args.max_delay, shortlist_only=args.shortlist_only)
+

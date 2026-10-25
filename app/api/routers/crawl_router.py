@@ -131,3 +131,35 @@ async def enqueue_instagram(username: str, force_deep_crawl: bool = False) -> di
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+from pydantic import BaseModel
+from typing import Optional
+from app.services.shortlist_crawl_service import trigger_shortlist_crawl_background
+
+
+class ShortlistTriggerRequest(BaseModel):
+    platform: str = "TIKTOK"
+    username: str
+    creatorId: Optional[str] = None
+    campaignId: Optional[str] = None
+
+
+@router.post("/shortlist-trigger", summary="Kích hoạt cào dữ liệu khi Creator được thêm vào Shortlist")
+async def trigger_shortlist_crawl(request: ShortlistTriggerRequest) -> dict:
+    try:
+        clean_user = request.username.removeprefix("@").strip()
+        trigger_shortlist_crawl_background(
+            platform=request.platform,
+            username=clean_user,
+            creator_id=request.creatorId,
+        )
+        return {
+            "status": "QUEUED",
+            "message": f"Đã tiếp nhận yêu cầu cào dữ liệu cho @{clean_user} ({request.platform}) khi vào Shortlist.",
+            "platform": request.platform.upper(),
+            "username": clean_user,
+            "creatorId": request.creatorId,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

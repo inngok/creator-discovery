@@ -456,3 +456,79 @@ def run_retrain_pipeline(self) -> None:
         logger.info("[WORKER] Chạy thành công AI Retrain Pipeline.")
     except Exception as e:
         logger.error(f"[WORKER] Lỗi khi chạy AI Retrain Pipeline: {e}")
+
+
+# ==============================================================================
+# PHA 3: TỰ ĐỘNG CÀO KOC MỚI ĐỊNH KỲ HÀNG TUẦN (WEEKLY DISCOVERY OF NEW KOCS)
+# ==============================================================================
+DISCOVERY_KEYWORDS_VI = [
+    "review mỹ phẩm",
+    "review đồ ăn",
+    "review công nghệ",
+    "review thời trang",
+    "review gia dụng",
+    "review du lịch",
+]
+
+
+@app.task(bind=True, queue="default")
+def weekly_discover_new_creators_task(self, max_new_kocs: int = 30) -> dict:
+    """
+    Task chạy định kỳ hàng tuần trên Celery Beat:
+    - Quét tìm kiếm ứng viên trên các chuyên mục ngành nghề phổ biến.
+    - LOẠI BỎ 100% KOC CŨ ĐÃ CÓ TRONG HỆ THỐNG (Chỉ chọn KOC mới toanh).
+    - Đưa KOC mới vào hàng đợi Preflight để lọc tự động (Rule Engine BR-01 -> BR-06)
+      và Deep Crawl nếu đạt chuẩn.
+    """
+    logger.info(f"[WEEKLY DISCOVERY] Bắt đầu luồng cào tự động hàng tuần tìm KOC MỚI (Tối đa {max_new_kocs} KOC)...")
+    try:
+        from app.crawlers.discovery_crawler import search_new_tiktok_candidates
+
+        candidates = search_new_tiktok_candidates(
+            keywords=DISCOVERY_KEYWORDS_VI,
+            max_per_keyword=8,
+            max_total=max_new_kocs * 2,  # Quét rộng để trừ hao các KOC cũ
+        )
+
+        new_enqueued = 0
+        skipped_old = 0
+
+        for cand in candidates:
+            if new_enqueued >= max_new_kocs:
+                break
+
+            platform = cand.get("platform", "TIKTOK")
+            username = cand.get("username", "").strip()
+            clean_user = username.removeprefix("@").strip().lower()
+
+            if not clean_user:
+                continue
+
+            # 🚨 KIỂM TRA CHỐNG CÀO KOC CŨ:
+            # Nếu username đã có trong staging database -> Bỏ qua tuyệt đối!
+            existing = staging_repo.get_candidate(platform, clean_user)
+            if existing is not None:
+                skipped_old += 1
+                logger.debug(f"[WEEKLY DISCOVERY] Bỏ qua KOC CŨ: {platform} @{clean_user} (đã có trong DB)")
+                continue
+
+            # Đây là KOC HOÀN TOÀN MỚI -> Đưa vào hàng đợi Preflight Task
+            preflight_candidate_task.delay(platform, clean_user)
+            new_enqueued += 1
+            logger.info(
+                f"[WEEKLY DISCOVERY ENQUEUE] Đã phát hiện và đưa KOC MỚI @{clean_user} "
+                f"({cand.get('followers', 0)} fl) vào Preflight Queue ({new_enqueued}/{max_new_kocs})"
+            )
+
+        summary = {
+            "status": "COMPLETED",
+            "total_candidates_scanned": len(candidates),
+            "new_kocs_enqueued": new_enqueued,
+            "old_kocs_skipped": skipped_old,
+        }
+        logger.info(f"[WEEKLY DISCOVERY] Hoàn tất luồng tự động hàng tuần: {summary}")
+        return summary
+    except Exception as e:
+        logger.error(f"[WEEKLY DISCOVERY] Lỗi khi cào KOC mới tự động hàng tuần: {e}")
+        return {"status": "FAILED", "error": str(e)}
+

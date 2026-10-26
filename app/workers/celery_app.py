@@ -26,16 +26,27 @@ app.conf.update(
         "app.workers.tasks.process_facebook_profile": {"queue": "deep_crawl_queue"},
         "app.workers.tasks.process_instagram_profile": {"queue": "deep_crawl_queue"},
         "app.workers.tasks.run_retrain_pipeline": {"queue": "default"},
+        "app.workers.tasks.weekly_discover_new_creators_task": {"queue": "default"},
     },
 )
 
 from celery.schedules import crontab
 
 app.conf.beat_schedule = {
+    # 1. Tự động retrain AI lúc 2h sáng Chủ Nhật hàng tuần
     "auto-retrain-every-sunday": {
         "task": "app.workers.tasks.run_retrain_pipeline",
         "schedule": crontab(
             hour=2, minute=0, day_of_week="sun"
-        ),  # Chạy lúc 2h sáng Chủ Nhật
+        ),
+    },
+    # 2. Tự động cào KOC MỚI lúc 3h sáng Thứ Hai hàng tuần (loại bỏ 100% KOC cũ)
+    "weekly-auto-discover-new-kocs": {
+        "task": "app.workers.tasks.weekly_discover_new_creators_task",
+        "schedule": crontab(
+            hour=3, minute=0, day_of_week="mon"
+        ),
+        "args": (30,),  # Tìm tối đa 30 KOC mới mỗi tuần
     },
 }
+

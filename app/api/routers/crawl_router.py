@@ -163,3 +163,21 @@ async def trigger_shortlist_crawl(request: ShortlistTriggerRequest) -> dict:
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/trigger-weekly-discovery", summary="Kích hoạt thủ công luồng cào tự động tìm KOC mới (Weekly Discovery)")
+async def trigger_weekly_discovery(max_new_kocs: int = 30) -> dict:
+    """Cho phép kích hoạt ngay luồng cào tự động KOC mới (thay vì đợi đến 3h sáng Thứ Hai)."""
+    try:
+        from app.workers.tasks import weekly_discover_new_creators_task
+
+        task = weekly_discover_new_creators_task.delay(max_new_kocs=max_new_kocs)
+        return {
+            "status": "QUEUED",
+            "message": f"Đã kích hoạt luồng cào KOC mới tự động vào Celery! Task ID: {task.id}",
+            "taskId": task.id,
+            "maxNewKocs": max_new_kocs,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

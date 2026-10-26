@@ -532,3 +532,86 @@ def weekly_discover_new_creators_task(self, max_new_kocs: int = 30) -> dict:
         logger.error(f"[WEEKLY DISCOVERY] Lỗi khi cào KOC mới tự động hàng tuần: {e}")
         return {"status": "FAILED", "error": str(e)}
 
+
+# ==============================================================================
+# PHA 4: TỰ ĐỘNG CÀO LẠI (REFRESH) CÁC KOC CŨ ĐÃ CÓ TRONG DATABASE
+# ==============================================================================
+@app.task(bind=True, queue="default")
+def auto_refresh_creators_in_db_task(self, limit: int = 25) -> dict:
+    """
+    Task chạy định kỳ tự động:
+    - Lấy danh sách các Creator cũ ĐÃ CÓ TRONG DATABASE có ngày cập nhật cũ nhất.
+    - Kích hoạt luồng cào làm mới (is_refresh=True) để lấy số follower, view, like mới
+      và tính lại dataConfidence (hồi phục độ tươi freshness về 1.00).
+    - Cập nhật trực tiếp (Upsert) vào hồ sơ KOC hiện có, KHÔNG tạo bản ghi mới.
+    """
+    logger.info(f"[AUTO REFRESH DB] Bắt đầu quét cào lại các KOC cũ trong DB (Giới hạn: {limit} KOC)...")
+    try:
+        targets: list[dict] = []
+
+        # 1. Thử lấy từ PostgreSQL Database nếu có cấu hình kết nối
+        try:
+            import psycopg2
+
+            db_host = os.environ.get("DB_HOST", "221.121.3.226")
+            db_user = os.environ.get("DB_USER", "influencermatch_user")
+            db_pass = os.environ.get("DB_PASSWORD", "12345")
+            db_name = os.environ.get("DB_NAME", "influencermatch_dev")
+
+            conn = psycopg2.connect(
+                host=db_host,
+                user=db_user,
+                password=db_pass,
+                dbname=db_name,
+                connect_timeout=5,
+            )
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT c.platform, c.user_name
+                FROM creator c
+                LEFT JOIN public_creator_metric m ON c.id = m.creator_id
+                ORDER BY m.observed_at ASC NULLS FIRST
+                LIMIT %s;
+            """, (limit,))
+            rows = cur.fetchall()
+            for r in rows:
+                if r[1]:
+                    targets.append({"platform": str(r[0]).upper(), "username": str(r[1]).strip()})
+            conn.close()
+            logger.info(f"[AUTO REFRESH DB] Đã lấy {len(targets)} KOC cũ từ PostgreSQL Deploy.")
+        except Exception as pg_err:
+            logger.debug(f"[AUTO REFRESH DB] Không kết nối được PostgreSQL ({pg_err}), chuyển sang Staging SQLite.")
+
+        # 2. Nếu không lấy được từ PostgreSQL, lấy từ Staging SQLite
+        if not targets:
+            stale_records = staging_repo.get_stale_ingested_candidates(limit=limit)
+            for rec in stale_records:
+                targets.append({"platform": rec.platform.upper(), "username": rec.username.strip()})
+            logger.info(f"[AUTO REFRESH DB] Đã lấy {len(targets)} KOC cũ từ Staging SQLite.")
+
+        if not targets:
+            logger.info("[AUTO REFRESH DB] Không tìm thấy KOC cũ nào cần làm mới.")
+            return {"status": "SUCCESS", "message": "Không có KOC nào cần cào lại.", "enqueued_count": 0}
+
+        enqueued_count = 0
+        for item in targets:
+            plat = item["platform"]
+            uname = item["username"].removeprefix("@").strip()
+            if not uname:
+                continue
+
+            # Kích hoạt cào làm mới với cờ is_refresh=True
+            preflight_candidate_task.delay(plat, uname, is_refresh=True)
+            enqueued_count += 1
+            logger.info(f"[AUTO REFRESH DB ENQUEUE] Đã xếp hàng cào lại ({enqueued_count}/{len(targets)}): {plat} @{uname}")
+
+        return {
+            "status": "COMPLETED",
+            "enqueued_count": enqueued_count,
+            "total_stale_found": len(targets),
+        }
+    except Exception as e:
+        logger.error(f"[AUTO REFRESH DB] Lỗi khi cào lại KOC cũ trong DB: {e}")
+        return {"status": "FAILED", "error": str(e)}
+
+

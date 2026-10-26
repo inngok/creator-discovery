@@ -27,6 +27,7 @@ app.conf.update(
         "app.workers.tasks.process_instagram_profile": {"queue": "deep_crawl_queue"},
         "app.workers.tasks.run_retrain_pipeline": {"queue": "default"},
         "app.workers.tasks.weekly_discover_new_creators_task": {"queue": "default"},
+        "app.workers.tasks.auto_refresh_creators_in_db_task": {"queue": "default"},
     },
 )
 
@@ -48,5 +49,14 @@ app.conf.beat_schedule = {
         ),
         "args": (30,),  # Tìm tối đa 30 KOC mới mỗi tuần
     },
+    # 3. Tự động cào lại (refresh) KOC CŨ ĐÃ CÓ TRONG DB lúc 4h sáng Thứ Năm hàng tuần
+    "weekly-refresh-existing-kocs-in-db": {
+        "task": "app.workers.tasks.auto_refresh_creators_in_db_task",
+        "schedule": crontab(
+            hour=4, minute=0, day_of_week="thu"
+        ),
+        "args": (25,),  # Cào làm mới 25 KOC cũ nhất mỗi tuần
+    },
 }
+
 

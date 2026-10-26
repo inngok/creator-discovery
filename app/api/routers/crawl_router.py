@@ -181,3 +181,21 @@ async def trigger_weekly_discovery(max_new_kocs: int = 30) -> dict:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/trigger-db-refresh", summary="Kích hoạt thủ công luồng cào làm mới (refresh) KOC cũ trong DB")
+async def trigger_db_refresh(limit: int = 25) -> dict:
+    """Cho phép kích hoạt ngay luồng cào làm mới KOC cũ trong DB (thay vì đợi đến 4h sáng Thứ Năm)."""
+    try:
+        from app.workers.tasks import auto_refresh_creators_in_db_task
+
+        task = auto_refresh_creators_in_db_task.delay(limit=limit)
+        return {
+            "status": "QUEUED",
+            "message": f"Đã kích hoạt luồng cào làm mới KOC cũ trong DB vào Celery! Task ID: {task.id}",
+            "taskId": task.id,
+            "limit": limit,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+

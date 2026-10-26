@@ -244,6 +244,22 @@ class CandidateStagingRepository:
             rows = cursor.fetchall()
             return [self._row_to_record(r) for r in rows]
 
+    def get_stale_ingested_candidates(self, limit: int = 30) -> list[CandidateStagingRecord]:
+        """Lấy danh sách các KOC đã INGESTED có thời gian cập nhật cũ nhất để cào làm mới (refresh)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM candidate_staging 
+                WHERE processing_status = 'INGESTED'
+                ORDER BY updated_at ASC 
+                LIMIT ?
+                """,
+                (limit,)
+            )
+            rows = cursor.fetchall()
+            return [self._row_to_record(r) for r in rows]
+
     def _row_to_record(self, row: sqlite3.Row) -> CandidateStagingRecord:
         return CandidateStagingRecord(
             id=row["id"],

@@ -1,4 +1,6 @@
+from typing import Optional
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from app.core.models import IngestPayload
 from app.crawlers.facebook_crawler import crawl_facebook_profile
@@ -12,6 +14,59 @@ from app.workers.tasks import (
 )
 
 router = APIRouter(prefix="/api/v1/crawl", tags=["Crawl"])
+
+
+class EnqueueCandidateRequest(BaseModel):
+    platform: str = Field(default="TIKTOK", description="Nền tảng: TIKTOK, FACEBOOK, INSTAGRAM")
+    username: str = Field(..., description="Username hoặc handle của Creator")
+    force_deep_crawl: bool = Field(default=False, description="Bỏ qua Preflight Gate, cào sâu ngay lập tức")
+
+
+@router.post("/enqueue", summary="Đưa Creator (TikTok / Facebook / Instagram) vào hàng đợi Celery Preflight Gate")
+async def enqueue_candidate(req: EnqueueCandidateRequest) -> dict:
+    try:
+        platform = (req.platform or "TIKTOK").upper()
+        clean_user = req.username.removeprefix("@").strip()
+        if not clean_user:
+            raise HTTPException(status_code=400, detail="Username không được để trống")
+
+        if platform not in ["TIKTOK", "FACEBOOK", "INSTAGRAM"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Nền tảng {platform} không được hỗ trợ. Vui lòng chọn: TIKTOK, FACEBOOK, INSTAGRAM",
+            )
+
+        if req.force_deep_crawl:
+            if platform == "TIKTOK":
+                task = process_tiktok_profile.delay(clean_user, is_refresh=True)
+            elif platform == "FACEBOOK":
+                task = process_facebook_profile.delay(clean_user, is_refresh=True)
+            else:
+                task = process_instagram_profile.delay(clean_user, is_refresh=True)
+
+            return {
+                "status": "success",
+                "platform": platform,
+                "username": clean_user,
+                "mode": "FORCE_DEEP_CRAWL",
+                "task_id": task.id,
+                "message": f"Đã ép buộc đưa {clean_user} ({platform}) vào hàng đợi Deep Crawl (is_refresh=True).",
+            }
+
+        task = preflight_candidate_task.delay(platform, clean_user)
+        return {
+            "status": "success",
+            "platform": platform,
+            "username": clean_user,
+            "mode": "PREFLIGHT_GATE",
+            "task_id": task.id,
+            "message": f"Đã đưa {clean_user} ({platform}) vào Preflight Gate để phân loại trước khi cào sâu.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.get("/tiktok", response_model=IngestPayload)
@@ -133,8 +188,6 @@ async def enqueue_instagram(username: str, force_deep_crawl: bool = False) -> di
         raise HTTPException(status_code=500, detail=str(e))
 
 
-from pydantic import BaseModel
-from typing import Optional
 from app.services.shortlist_crawl_service import trigger_shortlist_crawl_background
 
 

@@ -9,6 +9,16 @@ from playwright_stealth import Stealth
 
 from app.ai.rules.signal_extractor import PostPreview, ProfileMetadata
 from app.core.logger import setup_logger
+from app.crawlers.facebook_crawler import (
+    _init_facebook_playwright_context,
+    dismiss_facebook_dialogs,
+    extract_facebook_followers,
+    extract_facebook_posts,
+)
+from app.crawlers.instagram_crawler import (
+    _init_instagram_playwright_context,
+    extract_instagram_posts_from_soup,
+)
 from app.crawlers.tiktok_crawler import _init_playwright_context
 
 logger = setup_logger("preflight_fetcher")
@@ -148,28 +158,51 @@ def fetch_tiktok_preflight(username: str) -> tuple[ProfileMetadata, list[PostPre
 
 
 def fetch_facebook_preflight(username: str) -> tuple[ProfileMetadata, list[PostPreview]] | None:
-    """Lightweight Preflight cho Facebook Fanpage (chỉ bóc tách OpenGraph tags & 3 bài đầu)."""
+    """Lightweight Preflight cho Facebook Fanpage (Bóc tách Profile & 3 bài đăng gần nhất qua DOM/Meta)."""
     clean_user = username.removeprefix("@").strip()
     url = f"https://www.facebook.com/{clean_user}"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        context, _ = _init_facebook_playwright_context(p)
+        page = context.new_page()
+        stealth = Stealth()
+        stealth.apply_stealth_sync(page)
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=12000)
+            page.wait_for_timeout(2000)
+            dismiss_facebook_dialogs(page)
             content = page.content()
         except Exception as e:
             logger.warning(f"[PREFLIGHT] Không thể tải FB {username}: {e}")
             return None
         finally:
-            browser.close()
+            context.browser.close()
 
     soup = BeautifulSoup(content, "html.parser")
     og_title = soup.find("meta", property="og:title")
     og_desc = soup.find("meta", property="og:description")
+    meta_desc = soup.find("meta", attrs={"name": "description"})
 
     title_val = og_title.get("content", "") if og_title else clean_user
-    desc_val = og_desc.get("content", "") if og_desc else ""
+    desc_val = (og_desc.get("content") if og_desc else "") or (
+        meta_desc.get("content") if meta_desc else ""
+    )
+
+    page_text = soup.get_text(separator=" ")
+    followers = extract_facebook_followers(desc_val, page_text)
+
+    # Bóc tách ít nhất 3 bài đăng gần nhất cho Rule Engine thẩm định KOC
+    raw_posts = extract_facebook_posts(soup, clean_user, max_posts=3)
+    post_previews: list[PostPreview] = [
+        PostPreview(
+            post_id=p.platformPostId,
+            caption=p.caption,
+            created_at=p.postedAt,
+            views=p.views,
+            likes=p.likes,
+        )
+        for p in raw_posts
+    ]
 
     profile = ProfileMetadata(
         platform="FACEBOOK",
@@ -177,44 +210,69 @@ def fetch_facebook_preflight(username: str) -> tuple[ProfileMetadata, list[PostP
         username=clean_user,
         display_name=title_val,
         bio=desc_val,
-        followers=0,
+        followers=followers,
     )
-    return profile, []
+    return profile, post_previews
 
 
 def fetch_instagram_preflight(username: str) -> tuple[ProfileMetadata, list[PostPreview]] | None:
-    """Lightweight Preflight cho Instagram (chỉ bóc tách meta description)."""
+    """Lightweight Preflight cho Instagram (Bóc tách Profile & 3 bài đăng gần nhất từ script nhúng)."""
     clean_user = username.removeprefix("@").strip()
     url = f"https://www.instagram.com/{clean_user}/"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        context, _ = _init_instagram_playwright_context(p)
+        page = context.new_page()
+        stealth = Stealth()
+        stealth.apply_stealth_sync(page)
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=12000)
+            page.wait_for_timeout(1500)
             content = page.content()
         except Exception as e:
             logger.warning(f"[PREFLIGHT] Không thể tải Instagram @{username}: {e}")
             return None
         finally:
-            browser.close()
+            context.browser.close()
 
     soup = BeautifulSoup(content, "html.parser")
     og_desc = soup.find("meta", property="og:description")
-    desc_val = og_desc.get("content", "") if og_desc else ""
+    og_title = soup.find("meta", property="og:title")
+    meta_desc = soup.find("meta", attrs={"name": "description"})
+
+    desc_val = (og_desc.get("content") if og_desc else "") or (
+        meta_desc.get("content") if meta_desc else ""
+    )
+    title_val = og_title.get("content", "") if og_title else clean_user
+    dn_match = re.match(r"^(.*?)\s*\(@", title_val)
+    display_name = dn_match.group(1).strip() if dn_match else clean_user
 
     followers = 0
-    f_match = re.search(r"([\d.,]+[KMBkmb]?)\s+Followers", desc_val)
+    f_match = re.search(r"([\d.,]+[KMBkmb]?)\s+Followers", desc_val, re.IGNORECASE)
     if f_match:
         from app.crawlers.search_extractor import parse_follower_string
         followers = parse_follower_string(f_match.group(1))
+
+    # Bóc tách 3 bài đăng gần nhất trực tiếp từ script GraphQL của Instagram
+    raw_posts, _ = extract_instagram_posts_from_soup(soup, max_posts=3)
+    post_previews: list[PostPreview] = [
+        PostPreview(
+            post_id=p.platformPostId,
+            caption=p.caption,
+            created_at=p.postedAt,
+            views=p.views,
+            likes=p.likes,
+        )
+        for p in raw_posts
+    ]
 
     profile = ProfileMetadata(
         platform="INSTAGRAM",
         external_id=clean_user,
         username=f"@{clean_user}",
-        display_name=clean_user,
+        display_name=display_name,
         bio=desc_val,
         followers=followers,
     )
-    return profile, []
+    return profile, post_previews
+

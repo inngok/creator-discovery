@@ -16,6 +16,49 @@ from app.workers.tasks import (
 router = APIRouter(prefix="/api/v1/crawl", tags=["Crawl"])
 
 
+DEEP_CRAWL_TASKS = {
+    "TIKTOK": process_tiktok_profile,
+    "FACEBOOK": process_facebook_profile,
+    "INSTAGRAM": process_instagram_profile,
+}
+
+
+def _dispatch_enqueue(platform: str, username: str, force_deep_crawl: bool = False) -> dict:
+    plat = (platform or "TIKTOK").upper()
+    clean_user = username.removeprefix("@").strip()
+    if not clean_user:
+        raise HTTPException(status_code=400, detail="Username không được để trống")
+
+    task_fn = DEEP_CRAWL_TASKS.get(plat)
+    if not task_fn:
+        supported = ", ".join(DEEP_CRAWL_TASKS)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Nền tảng {plat} không được hỗ trợ. Vui lòng chọn: {supported}",
+        )
+
+    if force_deep_crawl:
+        task = task_fn.delay(clean_user, is_refresh=True)
+        return {
+            "status": "success",
+            "platform": plat,
+            "username": clean_user,
+            "mode": "FORCE_DEEP_CRAWL",
+            "task_id": task.id,
+            "message": f"Đã ép buộc đưa {clean_user} ({plat}) vào hàng đợi Deep Crawl (is_refresh=True).",
+        }
+
+    task = preflight_candidate_task.delay(plat, clean_user)
+    return {
+        "status": "success",
+        "platform": plat,
+        "username": clean_user,
+        "mode": "PREFLIGHT_GATE",
+        "task_id": task.id,
+        "message": f"Đã đưa {clean_user} ({plat}) vào Preflight Gate để phân loại trước khi cào sâu.",
+    }
+
+
 class EnqueueCandidateRequest(BaseModel):
     platform: str = Field(default="TIKTOK", description="Nền tảng: TIKTOK, FACEBOOK, INSTAGRAM")
     username: str = Field(..., description="Username hoặc handle của Creator")
@@ -24,49 +67,7 @@ class EnqueueCandidateRequest(BaseModel):
 
 @router.post("/enqueue", summary="Đưa Creator (TikTok / Facebook / Instagram) vào hàng đợi Celery Preflight Gate")
 async def enqueue_candidate(req: EnqueueCandidateRequest) -> dict:
-    try:
-        platform = (req.platform or "TIKTOK").upper()
-        clean_user = req.username.removeprefix("@").strip()
-        if not clean_user:
-            raise HTTPException(status_code=400, detail="Username không được để trống")
-
-        if platform not in ["TIKTOK", "FACEBOOK", "INSTAGRAM"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Nền tảng {platform} không được hỗ trợ. Vui lòng chọn: TIKTOK, FACEBOOK, INSTAGRAM",
-            )
-
-        if req.force_deep_crawl:
-            if platform == "TIKTOK":
-                task = process_tiktok_profile.delay(clean_user, is_refresh=True)
-            elif platform == "FACEBOOK":
-                task = process_facebook_profile.delay(clean_user, is_refresh=True)
-            else:
-                task = process_instagram_profile.delay(clean_user, is_refresh=True)
-
-            return {
-                "status": "success",
-                "platform": platform,
-                "username": clean_user,
-                "mode": "FORCE_DEEP_CRAWL",
-                "task_id": task.id,
-                "message": f"Đã ép buộc đưa {clean_user} ({platform}) vào hàng đợi Deep Crawl (is_refresh=True).",
-            }
-
-        task = preflight_candidate_task.delay(platform, clean_user)
-        return {
-            "status": "success",
-            "platform": platform,
-            "username": clean_user,
-            "mode": "PREFLIGHT_GATE",
-            "task_id": task.id,
-            "message": f"Đã đưa {clean_user} ({platform}) vào Preflight Gate để phân loại trước khi cào sâu.",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+    return _dispatch_enqueue(req.platform, req.username, req.force_deep_crawl)
 
 
 @router.get("/tiktok", response_model=IngestPayload)
@@ -87,25 +88,7 @@ async def crawl_tiktok(username: str):
 
 @router.post("/tiktok/enqueue", summary="Đưa Creator TikTok vào hàng đợi (Preflight Gate mặc định)")
 async def enqueue_tiktok(username: str, force_deep_crawl: bool = False) -> dict:
-    try:
-        clean_user = username.removeprefix("@").strip()
-        if force_deep_crawl:
-            task = process_tiktok_profile.delay(clean_user, is_refresh=True)
-            return {
-                "status": "success",
-                "mode": "FORCE_DEEP_CRAWL",
-                "task_id": task.id,
-                "message": f"Đã ép buộc đưa @{clean_user} vào hàng đợi Deep Crawl (is_refresh=True).",
-            }
-        task = preflight_candidate_task.delay("TIKTOK", clean_user)
-        return {
-            "status": "success",
-            "mode": "PREFLIGHT_GATE",
-            "task_id": task.id,
-            "message": f"Đã đưa @{clean_user} vào Preflight Gate để phân loại trước khi cào sâu.",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return _dispatch_enqueue("TIKTOK", username, force_deep_crawl)
 
 
 @router.get("/facebook", response_model=IngestPayload, summary="Cào trực tiếp Facebook")
@@ -126,25 +109,7 @@ async def crawl_facebook(username: str):
 
 @router.post("/facebook/enqueue", summary="Đưa Creator Facebook vào hàng đợi (Preflight Gate mặc định)")
 async def enqueue_facebook(username: str, force_deep_crawl: bool = False) -> dict:
-    try:
-        clean_user = username.removeprefix("@").strip()
-        if force_deep_crawl:
-            task = process_facebook_profile.delay(clean_user, is_refresh=True)
-            return {
-                "status": "success",
-                "mode": "FORCE_DEEP_CRAWL",
-                "task_id": task.id,
-                "message": f"Đã ép buộc đưa {clean_user} vào hàng đợi Deep Crawl FB (is_refresh=True).",
-            }
-        task = preflight_candidate_task.delay("FACEBOOK", clean_user)
-        return {
-            "status": "success",
-            "mode": "PREFLIGHT_GATE",
-            "task_id": task.id,
-            "message": f"Đã đưa {clean_user} vào Preflight Gate FB để phân loại trước khi cào sâu.",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return _dispatch_enqueue("FACEBOOK", username, force_deep_crawl)
 
 
 @router.get("/instagram", response_model=IngestPayload, summary="Cào trực tiếp Instagram")
@@ -167,25 +132,7 @@ async def crawl_instagram(username: str):
 
 @router.post("/instagram/enqueue", summary="Đưa Creator Instagram vào hàng đợi (Preflight Gate mặc định)")
 async def enqueue_instagram(username: str, force_deep_crawl: bool = False) -> dict:
-    try:
-        clean_user = username.removeprefix("@").strip()
-        if force_deep_crawl:
-            task = process_instagram_profile.delay(clean_user, is_refresh=True)
-            return {
-                "status": "success",
-                "mode": "FORCE_DEEP_CRAWL",
-                "task_id": task.id,
-                "message": f"Đã ép buộc đưa @{clean_user} vào hàng đợi Deep Crawl IG (is_refresh=True).",
-            }
-        task = preflight_candidate_task.delay("INSTAGRAM", clean_user)
-        return {
-            "status": "success",
-            "mode": "PREFLIGHT_GATE",
-            "task_id": task.id,
-            "message": f"Đã đưa @{clean_user} vào Preflight Gate IG để phân loại trước khi cào sâu.",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return _dispatch_enqueue("INSTAGRAM", username, force_deep_crawl)
 
 
 from app.services.shortlist_crawl_service import trigger_shortlist_crawl_background

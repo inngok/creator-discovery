@@ -8,6 +8,7 @@ from app.crawlers.preflight_fetcher import (
     fetch_facebook_preflight,
     fetch_instagram_preflight,
     fetch_tiktok_preflight,
+    fetch_tiktok_author_info,
 )
 
 logger = setup_logger("preflight_service")
@@ -144,6 +145,133 @@ class PreflightService:
 
         finally:
             release_candidate_lock(platform_upper, clean_user)
+
+
+    @classmethod
+    def resolve_author_id(
+        cls,
+        platform: str = "TIKTOK",
+        username: str = "",
+        expected_external_id: str | None = None,
+        auto_update_staging: bool = True,
+    ) -> dict:
+        """
+        Lightweight Preflight SSR Author ID Resolution & Verification:
+        - Bóc tách dãy ID số cố định (Author ID / external_id) từ thẻ SSR __UNIVERSAL_DATA_FOR_REHYDRATION__.
+        - Phục vụ đối soát danh tính KOC khi KOC đổi username (ví dụ: mixigaming -> domixi) trước khi xác thực qua TikTok OAuth.
+        - So sánh với expected_external_id (nếu truyền vào).
+        - Tra cứu trong Staging DB xem có KOC nào có cùng external_id.
+        - Tự động cập nhật username mới vào Staging DB nếu có cờ auto_update_staging.
+        """
+        platform_upper = (platform or "TIKTOK").upper()
+        clean_user = username.strip().removeprefix("@")
+        if not clean_user:
+            return {
+                "status": "error",
+                "message": "Username không được để trống",
+            }
+
+        if platform_upper != "TIKTOK":
+            return {
+                "status": "error",
+                "message": f"Nền tảng {platform_upper} chưa hỗ trợ resolve Author ID qua SSR. Hiện chỉ hỗ trợ TIKTOK.",
+            }
+
+        logger.info(f"[PREFLIGHT AUTHOR RESOLVER] Đang bóc tách SSR Author ID cho @{clean_user}...")
+        author_info = fetch_tiktok_author_info(clean_user)
+        if not author_info or not author_info.get("author_id"):
+            logger.warning(f"[PREFLIGHT AUTHOR RESOLVER] Không thể lấy Author ID từ SSR cho @{clean_user}")
+            return {
+                "status": "error",
+                "platform": platform_upper,
+                "input_username": clean_user,
+                "message": f"Không thể lấy Author ID từ SSR cho @{clean_user}. Kênh có thể không tồn tại hoặc bị chặn bởi TikTok.",
+            }
+
+        author_id = author_info["author_id"]
+        resolved_username = author_info.get("unique_id") or clean_user
+        display_name = author_info.get("display_name", "")
+
+        is_matched = None
+        previous_username = None
+        matched_candidate = None
+        message = ""
+
+        # 1. Tìm bản ghi hiện có trong Staging DB theo external_id
+        existing_candidate = staging_repo.get_candidate_by_external_id(platform_upper, author_id)
+        if existing_candidate:
+            previous_username = existing_candidate.username
+            matched_candidate = {
+                "id": existing_candidate.id,
+                "previous_username": previous_username,
+                "display_name": existing_candidate.display_name,
+                "decision": existing_candidate.decision.value,
+                "primary_type": existing_candidate.primary_type,
+            }
+
+        # 2. Trường hợp A: Backend truyền expected_external_id để xác minh
+        if expected_external_id:
+            exp_clean = str(expected_external_id).strip()
+            if author_id == exp_clean:
+                is_matched = True
+                message = f"Author ID '{author_id}' trùng khớp 100% với expected_external_id. KOC @{clean_user} đã được đối soát thành công."
+                if auto_update_staging and existing_candidate and previous_username != clean_user:
+                    staging_repo.update_candidate_username(
+                        platform=platform_upper,
+                        external_id=author_id,
+                        new_username=clean_user,
+                        new_display_name=display_name,
+                    )
+                    message += f" Đã cập nhật username từ @{previous_username} thành @{clean_user} trong Staging DB."
+            else:
+                is_matched = False
+                message = f"Author ID không khớp! Kênh @{clean_user} có ID={author_id}, khác với expected_external_id={exp_clean}."
+
+        # 3. Trường hợp B: Không truyền expected_external_id -> Tự động tìm trong hệ thống
+        else:
+            if existing_candidate:
+                is_matched = True
+                if previous_username != clean_user:
+                    message = f"Phát hiện KOC đổi tên! Kênh này trước đây có username là @{previous_username}, hiện tại là @{clean_user} (Author ID: {author_id})."
+                    if auto_update_staging:
+                        staging_repo.update_candidate_username(
+                            platform=platform_upper,
+                            external_id=author_id,
+                            new_username=clean_user,
+                            new_display_name=display_name,
+                        )
+                        message += " Đã cập nhật username mới vào Staging DB."
+                else:
+                    message = f"KOC @{clean_user} đã tồn tại trong hệ thống với Author ID: {author_id}."
+            else:
+                is_matched = None
+                message = f"Đã bóc tách thành công Author ID: {author_id} cho @{clean_user}. Sẵn sàng để đối soát trong DB chính."
+
+        return {
+            "status": "success",
+            "platform": platform_upper,
+            "input_username": clean_user,
+            "resolved_username": resolved_username,
+            "author_id": author_id,
+            "sec_uid": author_info.get("sec_uid", ""),
+            "expected_external_id": expected_external_id,
+            "is_matched": is_matched,
+            "previous_username": previous_username,
+            "matched_staging_candidate": matched_candidate,
+            "creator_info": {
+                "display_name": display_name,
+                "avatar_url": author_info.get("avatar_url", ""),
+                "followers": author_info.get("followers", 0),
+                "following": author_info.get("following", 0),
+                "heart_count": author_info.get("heart_count", 0),
+                "video_count": author_info.get("video_count", 0),
+                "bio": author_info.get("bio", ""),
+                "bio_link": author_info.get("bio_link", ""),
+                "is_verified": author_info.get("is_verified", False),
+                "profile_url": author_info.get("profile_url", ""),
+            },
+            "message": message,
+        }
 
 
 preflight_service = PreflightService()

@@ -97,6 +97,7 @@ class CandidateStagingRepository:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_stg_plat_user ON candidate_staging(platform, username);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_stg_decision ON candidate_staging(decision);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_stg_status ON candidate_staging(processing_status);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_stg_plat_extid ON candidate_staging(platform, external_id);")
             conn.commit()
 
     def upsert_candidate(self, record: CandidateStagingRecord) -> CandidateStagingRecord:
@@ -259,6 +260,81 @@ class CandidateStagingRepository:
             )
             rows = cursor.fetchall()
             return [self._row_to_record(r) for r in rows]
+
+    def get_candidate_by_external_id(
+        self, platform: str, external_id: str
+    ) -> CandidateStagingRecord | None:
+        """Tìm candidate theo platform và external_id (Author ID số cố định)."""
+        clean_ext_id = str(external_id).strip()
+        if not clean_ext_id:
+            return None
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM candidate_staging WHERE platform = ? AND external_id = ? ORDER BY updated_at DESC LIMIT 1",
+                (platform.upper(), clean_ext_id),
+            )
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_record(row)
+            return None
+
+    def update_candidate_username(
+        self,
+        platform: str,
+        external_id: str,
+        new_username: str,
+        new_display_name: str | None = None,
+    ) -> bool:
+        """Cập nhật username (và display_name) mới khi KOC đổi tên trên kênh."""
+        clean_user = new_username.removeprefix("@").strip()
+        clean_ext_id = str(external_id).strip()
+        if not clean_ext_id or not clean_user:
+            return False
+
+        target_record = self.get_candidate_by_external_id(platform, clean_ext_id)
+        if not target_record:
+            return False
+
+        now_str = datetime.now(UTC).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 1. Xóa mọi bản ghi khác đang chiếm new_username trên cùng platform để tránh vi phạm UNIQUE
+            cursor.execute(
+                "DELETE FROM candidate_staging WHERE platform = ? AND (username = ? OR username = ?) AND id != ?",
+                (platform.upper(), clean_user, f"@{clean_user}", target_record.id),
+            )
+            # 2. Xóa các bản ghi trùng lặp thừa có cùng external_id
+            cursor.execute(
+                "DELETE FROM candidate_staging WHERE platform = ? AND external_id = ? AND id != ?",
+                (platform.upper(), clean_ext_id, target_record.id),
+            )
+            # 3. Cập nhật bản ghi chính xác theo khóa chính id
+            new_profile_url = (
+                f"https://www.tiktok.com/@{clean_user}"
+                if platform.upper() == "TIKTOK"
+                else f"https://www.facebook.com/{clean_user}"
+            )
+            if new_display_name:
+                cursor.execute(
+                    """
+                    UPDATE candidate_staging
+                    SET username = ?, display_name = ?, profile_url = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (clean_user, new_display_name, new_profile_url, now_str, target_record.id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE candidate_staging
+                    SET username = ?, profile_url = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (clean_user, new_profile_url, now_str, target_record.id),
+                )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def _row_to_record(self, row: sqlite3.Row) -> CandidateStagingRecord:
         return CandidateStagingRecord(

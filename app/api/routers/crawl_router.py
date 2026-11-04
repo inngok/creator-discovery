@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -6,6 +7,7 @@ from app.core.models import IngestPayload
 from app.crawlers.facebook_crawler import crawl_facebook_profile
 from app.crawlers.instagram_crawler import crawl_instagram_profile
 from app.crawlers.tiktok_crawler import crawl_tiktok_profile
+from app.services.preflight_service import PreflightService
 from app.workers.tasks import (
     preflight_candidate_task,
     process_facebook_profile,
@@ -199,3 +201,96 @@ async def trigger_db_refresh(limit: int = 25) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+class ResolveAuthorRequest(BaseModel):
+    username: str = Field(..., description="Username hiện tại của KOC trên TikTok (ví dụ: domixi hoặc @domixi)")
+    expected_external_id: Optional[str] = Field(
+        default=None,
+        description="External ID (Author ID số cố định) lưu trong DB để đối soát"
+    )
+    auto_update_staging: bool = Field(
+        default=True,
+        description="Tự động cập nhật username mới vào DB Staging nếu trùng khớp Author ID"
+    )
+
+
+class PreflightResolveAuthorRequest(BaseModel):
+    platform: str = Field(default="TIKTOK", description="Nền tảng (mặc định: TIKTOK)")
+    username: str = Field(..., description="Username hiện tại của KOC")
+    expected_external_id: Optional[str] = Field(
+        default=None,
+        description="External ID (Author ID số cố định) lưu trong DB để đối soát"
+    )
+    auto_update_staging: bool = Field(
+        default=True,
+        description="Tự động cập nhật username mới vào DB Staging nếu trùng khớp Author ID"
+    )
+
+
+@router.post(
+    "/tiktok/resolve-author",
+    summary="Bóc tách Author ID TikTok qua SSR và đối soát KOC đổi tên",
+    description="Sử dụng Lightweight Preflight SSR để lấy Author ID (dãy số cố định) cho username TikTok mới (ví dụ: domixi), phục vụ đối soát với external_id trong DB khi KOC đổi tên trước khi đăng nhập TikTok OAuth.",
+)
+async def resolve_tiktok_author(req: ResolveAuthorRequest) -> dict:
+    clean_user = req.username.removeprefix("@").strip()
+    if not clean_user:
+        raise HTTPException(status_code=400, detail="Username không được để trống")
+
+    result = await asyncio.to_thread(
+        PreflightService.resolve_author_id,
+        platform="TIKTOK",
+        username=clean_user,
+        expected_external_id=req.expected_external_id,
+        auto_update_staging=req.auto_update_staging,
+    )
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result.get("message", "Không thể lấy thông tin tác giả"))
+    return result
+
+
+@router.get(
+    "/tiktok/resolve-author",
+    summary="Tra cứu nhanh Author ID TikTok qua query params (SSR Preflight)",
+)
+async def get_tiktok_author(
+    username: str,
+    expected_external_id: Optional[str] = None,
+    auto_update_staging: bool = True,
+) -> dict:
+    clean_user = username.removeprefix("@").strip()
+    if not clean_user:
+        raise HTTPException(status_code=400, detail="Username không được để trống")
+
+    result = await asyncio.to_thread(
+        PreflightService.resolve_author_id,
+        platform="TIKTOK",
+        username=clean_user,
+        expected_external_id=expected_external_id,
+        auto_update_staging=auto_update_staging,
+    )
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result.get("message", "Không thể lấy thông tin tác giả"))
+    return result
+
+
+@router.post(
+    "/preflight/resolve-author",
+    summary="Đối soát Author ID tổng quát qua Preflight SSR Gate",
+)
+async def resolve_preflight_author(req: PreflightResolveAuthorRequest) -> dict:
+    clean_user = req.username.removeprefix("@").strip()
+    if not clean_user:
+        raise HTTPException(status_code=400, detail="Username không được để trống")
+
+    result = await asyncio.to_thread(
+        PreflightService.resolve_author_id,
+        platform=req.platform,
+        username=clean_user,
+        expected_external_id=req.expected_external_id,
+        auto_update_staging=req.auto_update_staging,
+    )
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result.get("message", "Không thể lấy thông tin tác giả"))
+    return result

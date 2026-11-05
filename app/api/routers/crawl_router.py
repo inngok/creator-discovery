@@ -294,3 +294,102 @@ async def resolve_preflight_author(req: PreflightResolveAuthorRequest) -> dict:
     if result.get("status") == "error":
         raise HTTPException(status_code=404, detail=result.get("message", "Không thể lấy thông tin tác giả"))
     return result
+
+
+# ============================================================================
+# LUỒNG DM-05: CÀO THỬ NGHIỆM & CÀO HÀNG LOẠT THEO NGÀNH NGHỀ THỜI GIAN THỰC
+# ============================================================================
+
+from app.services.category_discovery_service import category_discovery_service
+from app.services.live_crawl_service import crawl_single_koc_live
+from app.core.metrics_tracker import metrics_tracker
+
+
+class TestScrapeRequest(BaseModel):
+    profile_url: str = Field(..., description="URL kênh hoặc @username (VD: https://www.tiktok.com/@schannelvn hoặc schannelvn)")
+    platform: str = Field(default="TIKTOK", description="Nền tảng: TIKTOK, FACEBOOK, INSTAGRAM")
+
+
+class BatchCrawlRequest(BaseModel):
+    platform: str = Field(default="TIKTOK", description="Nền tảng: TIKTOK, FACEBOOK, INSTAGRAM")
+    category: Optional[str] = Field(default=None, description="Mã ngành hàng: BEAUTY, TECH, FOOD, FASHION, ENTERTAINMENT, TRAVEL, LIFESTYLE")
+    usernames: list[str] = Field(default=[], description="Danh sách link hoặc username cụ thể do người dùng nhập")
+    max_channels: int = Field(default=5, ge=1, le=20, description="Số lượng kênh tối đa cào trong 1 lượt")
+
+
+@router.get(
+    "/categories",
+    summary="Lấy danh mục ngành hàng hỗ trợ cho Batch Crawl (Taxonomy)",
+)
+async def get_crawl_categories() -> list[dict]:
+    return category_discovery_service.get_supported_categories()
+
+
+@router.post(
+    "/test-scrape",
+    summary="Cào thử nghiệm 1 KOC thời gian thực (Test Scrape)",
+    description="Nhận URL/username bất kỳ, cào trực tiếp Profile + 10 clip thật và trả về kết quả ngay lập tức.",
+)
+async def test_scrape_koc(req: TestScrapeRequest) -> dict:
+    url_or_user = req.profile_url.strip()
+    if not url_or_user:
+        raise HTTPException(status_code=400, detail="Vui lòng cung cấp URL kênh hoặc username")
+
+    result = await asyncio.to_thread(crawl_single_koc_live, url_or_user, req.platform)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("error", "Lỗi khi cào dữ liệu"))
+    return result
+
+
+@router.post(
+    "/batch-crawl",
+    summary="Cào hàng loạt KOC trực tiếp theo ngành hàng hoặc danh sách (Batch Crawl)",
+    description="Cào trực tiếp nhiều KOC trong 1 lượt theo ngành hàng (Taxonomy) hoặc theo danh sách nhập vào.",
+)
+async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
+    target_usernames: list[str] = []
+
+    # 1. Nếu người dùng tự nhập danh sách username/link
+    if req.usernames:
+        target_usernames = [u.strip() for u in req.usernames if u.strip()][:req.max_channels]
+
+    # 2. Nếu người dùng chọn theo ngành nghề (Taxonomy)
+    elif req.category:
+        candidates = category_discovery_service.get_candidates_by_category(req.category, limit=req.max_channels)
+        target_usernames = [c["username"] for c in candidates]
+
+    if not target_usernames:
+        raise HTTPException(
+            status_code=400,
+            detail="Vui lòng chọn ngành nghề hợp lệ hoặc nhập ít nhất 1 username/link để cào.",
+        )
+
+    results = []
+    success_count = 0
+    failed_count = 0
+    total_latency = 0.0
+
+    for uname in target_usernames:
+        res = await asyncio.to_thread(crawl_single_koc_live, uname, req.platform)
+        if res.get("status") == "success":
+            success_count += 1
+            total_latency += res.get("latency_ms", 0.0)
+        else:
+            failed_count += 1
+        results.append(res)
+
+    avg_latency = round(total_latency / success_count, 2) if success_count > 0 else 0.0
+
+    return {
+        "status": "success",
+        "category": req.category,
+        "platform": req.platform.upper(),
+        "summary": {
+            "total_requested": len(target_usernames),
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "avg_latency_ms": avg_latency,
+        },
+        "results": results,
+        "metrics": metrics_tracker.get_metrics_summary(),
+    }

@@ -336,6 +336,78 @@ class CandidateStagingRepository:
             conn.commit()
             return cursor.rowcount > 0
 
+    def get_summary_stats(self) -> dict[str, Any]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM candidate_staging")
+            total = cursor.fetchone()[0]
+
+            cursor.execute("SELECT processing_status, COUNT(*) FROM candidate_staging GROUP BY processing_status")
+            status_counts = {row[0]: row[1] for row in cursor.fetchall()}
+
+            cursor.execute("SELECT decision, COUNT(*) FROM candidate_staging GROUP BY decision")
+            decision_counts = {row[0]: row[1] for row in cursor.fetchall()}
+
+            cursor.execute("SELECT platform, COUNT(*) FROM candidate_staging GROUP BY platform")
+            platform_counts = {row[0]: row[1] for row in cursor.fetchall()}
+
+            active_crawls = status_counts.get("PREFLIGHT_RUNNING", 0) + status_counts.get("DEEP_CRAWLING", 0)
+            completed = status_counts.get("INGESTED", 0) + status_counts.get("PREFLIGHT_DONE", 0)
+            failed = status_counts.get("FAILED", 0)
+
+            return {
+                "total_candidates": total,
+                "active_crawls": active_crawls,
+                "completed": completed,
+                "failed": failed,
+                "by_status": status_counts,
+                "by_decision": decision_counts,
+                "by_platform": platform_counts,
+            }
+
+    def list_candidates(
+        self, limit: int = 50, offset: int = 0, platform: str | None = None
+    ) -> tuple[list[CandidateStagingRecord], int]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if platform:
+                cursor.execute("SELECT COUNT(*) FROM candidate_staging WHERE platform = ?", (platform.upper(),))
+                total = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT * FROM candidate_staging WHERE platform = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                    (platform.upper(), limit, offset)
+                )
+            else:
+                cursor.execute("SELECT COUNT(*) FROM candidate_staging")
+                total = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT * FROM candidate_staging ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset)
+                )
+            rows = cursor.fetchall()
+            return [self._row_to_record(r) for r in rows], total
+
+    def get_candidate_by_identifier(
+        self, identifier: str, platform: str | None = None
+    ) -> CandidateStagingRecord | None:
+        clean_id = identifier.removeprefix("@").strip()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if platform:
+                cursor.execute(
+                    "SELECT * FROM candidate_staging WHERE platform = ? AND (username = ? OR username = ? OR external_id = ?) ORDER BY updated_at DESC LIMIT 1",
+                    (platform.upper(), clean_id, f"@{clean_id}", clean_id)
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM candidate_staging WHERE (username = ? OR username = ? OR external_id = ?) ORDER BY updated_at DESC LIMIT 1",
+                    (clean_id, f"@{clean_id}", clean_id)
+                )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_record(row)
+
     def _row_to_record(self, row: sqlite3.Row) -> CandidateStagingRecord:
         return CandidateStagingRecord(
             id=row["id"],

@@ -3,6 +3,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core.candidate_staging import staging_repo
+from app.core.metrics_tracker import metrics_tracker
 from app.services.crawled_result_service import (
     get_crawled_result_by_username,
     list_crawled_results,
@@ -24,6 +25,7 @@ async def get_crawl_overview(
     - stats: Tóm tắt tổng số, số kênh đang cào (active), thành công, lỗi...
     - activities: Danh sách tiến trình cào (ai đang cào, ai xong, ai bị reject...)
     - crawled_data: Dữ liệu Creator vừa cào được (Follower, Bio, Bài viết, AI Tags...)
+    - metrics: Chỉ số hiệu suất thời gian thực (429, latency)
     """
     # 1. Thống kê
     stats = staging_repo.get_summary_stats()
@@ -47,8 +49,12 @@ async def get_crawl_overview(
     # 3. Dữ liệu đã cào được
     crawled_records, total_crawled = list_crawled_results(limit=limit, offset=0)
 
+    # 4. Chỉ số hiệu suất thời gian thực
+    metrics = metrics_tracker.get_metrics_summary()
+
     return {
         "stats": stats,
+        "metrics": metrics,
         "activities": {
             "total": total_activities,
             "items": activities,
@@ -58,6 +64,15 @@ async def get_crawl_overview(
             "items": crawled_records,
         },
     }
+
+
+@router.get(
+    "/metrics",
+    summary="Hiển thị chỉ số hiệu suất của Crawler thời gian thực (Performance Metrics)",
+    description="Trả về tổng số request, số thành công, số lỗi Rate Limit 429, tốc độ phản hồi trung bình (latency) và lịch sử gần nhất.",
+)
+async def get_crawler_performance_metrics() -> dict[str, Any]:
+    return metrics_tracker.get_metrics_summary()
 
 
 @router.get(

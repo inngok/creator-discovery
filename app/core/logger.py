@@ -11,7 +11,12 @@ def setup_logger(name: str) -> logging.Logger:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-        # Console handler
+        # Console handler with UTF-8 support on Windows
+        if hasattr(sys.stdout, "reconfigure"):
+            try:
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
         ch = logging.StreamHandler(sys.stdout)
         ch.setFormatter(formatter)
         logger.addHandler(ch)

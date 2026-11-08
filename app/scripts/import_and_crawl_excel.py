@@ -14,7 +14,7 @@ from app.ai.services.embedding_service import embedding_service
 from app.ai.training_db import save_training_data
 from app.clients.java_client import java_client
 from app.core.logger import setup_logger
-from app.workers.tasks import process_tiktok_profile
+from app.workers.tasks import preflight_candidate_task
 
 logger = setup_logger("import_excel")
 
@@ -33,32 +33,52 @@ def clean_username(val: str) -> str:
     return val.strip()
 
 
+import unicodedata
+
+
 def parse_int_safe(val) -> int:
-    """Chuyển đổi an toàn sang số nguyên int."""
-    if not val or pd.isna(val):
+    """Chuyển đổi an toàn sang số nguyên int (hỗ trợ cả hậu tố K, M, B)."""
+    if val is None or pd.isna(val):
         return 0
-    try:
-        clean = re.sub(r"[^\d]", "", str(val))
-        return int(clean) if clean else 0
-    except Exception:
-        return 0
+    if isinstance(val, (int, float)):
+        return int(val)
+    s = str(val).strip().replace(" ", "").replace(",", ".")
+    m = re.match(r"^([\d.]+)([kKmMbB]?)$", s)
+    if m:
+        num, suffix = m.groups()
+        try:
+            val_float = float(num)
+            suffix = suffix.upper()
+            if suffix == "K":
+                return int(val_float * 1_000)
+            elif suffix == "M":
+                return int(val_float * 1_000_000)
+            elif suffix == "B":
+                return int(val_float * 1_000_000_000)
+            return int(val_float)
+        except Exception:
+            return 0
+    clean = re.sub(r"[^\d]", "", s)
+    return int(clean) if clean else 0
 
 
 def find_column(df: pd.DataFrame, possible_names: list[str]) -> str:
-    """Tìm tên cột phù hợp không phân biệt hoa thường."""
+    """Tìm tên cột phù hợp không phân biệt hoa thường và chuẩn hóa Unicode NFC."""
     for col in df.columns:
-        col_clean = str(col).strip().lower()
+        col_clean = unicodedata.normalize("NFC", str(col)).strip().lower()
         for candidate in possible_names:
-            if candidate.lower() in col_clean:
+            candidate_clean = unicodedata.normalize("NFC", candidate).strip().lower()
+            if candidate_clean in col_clean:
                 return col
     return ""
 
 
-def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
+def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: bool = False):
     """
     Import Creator từ Excel.
     - mode = 'crawl': Bơm vào Celery cào mới live, AI phân loại, đẩy Java backend.
     - mode = 'direct': Lấy dữ liệu sẵn trong Excel lưu thẳng vào Java Backend & SQLite AI.
+    - force: Bỏ qua kiểm tra trùng lặp từ database SQLite cũ.
     """
     if not os.path.exists(file_path):
         logger.error(f"[-] Không tìm thấy file tại: {file_path}")
@@ -84,6 +104,7 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
     col_likes = find_column(df, ["lượt thích trung bình", "avg likes", "likes"])
     col_eng = find_column(df, ["tỷ lệ tương tác", "engagement", "er"])
     col_profile = find_column(df, ["nhà sáng tạo tiktok", "link tiktok", "url"])
+    col_contact = find_column(df, ["liên hệ", "contact", "email", "phone", "sđt", "zalo"])
 
     if not col_id:
         logger.error("[-] Không tìm thấy cột chứa Username/ID Chuyên gia trong file!")
@@ -91,13 +112,14 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
 
     logger.info(f"[+] Cột Username/ID: '{col_id}'")
     logger.info(f"[+] Cột Tên: '{col_name}' | Followers: '{col_followers}' | Ngành: '{col_cat}'")
+    logger.info(f"[+] Cột Views TB: '{col_views}' | Likes TB: '{col_likes}' | Tỷ lệ tương tác: '{col_eng}'")
 
     # Tải danh sách creator đã có trong hệ thống để chống trùng lặp
     import sqlite3
     from app.ai.training_db import DB_PATH
 
     existing_usernames = set()
-    if os.path.exists(DB_PATH):
+    if not force and os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
@@ -109,6 +131,8 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
             logger.info(f"[i] Đã tải {len(existing_usernames)} creator đã có trong hệ thống để lọc trùng.")
         except Exception as e:
             logger.warning(f"[!] Không thể đọc danh sách cũ: {e}")
+    elif force:
+        logger.info("[i] Cờ --force được bật: Bỏ qua kiểm tra trùng lặp với danh sách cũ.")
 
     success_count = 0
     skip_count = 0
@@ -128,17 +152,17 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
             existing_usernames.add(uname_lower)
 
             try:
-                process_tiktok_profile.delay(uname)
+                preflight_candidate_task.delay("TIKTOK", uname)
                 success_count += 1
                 if success_count % 50 == 0 or success_count == len(df):
-                    logger.info(f"[Celery Enqueue] Đã đưa {success_count} creators mới vào hàng đợi (Đã bỏ qua {skip_count} trùng)...")
+                    logger.info(f"[Preflight Enqueue] Đã đưa {success_count} creators mới vào Preflight Queue (Đã bỏ qua {skip_count} trùng)...")
                 if delay > 0:
                     time.sleep(delay)
             except Exception as e:
-                logger.error(f"[-] Lỗi đưa @{uname} vào Celery: {e}")
+                logger.error(f"[-] Lỗi đưa @{uname} vào Preflight Queue: {e}")
 
-        logger.info(f"[V] HOÀN TẤT! Đã đưa {success_count} Creator mới vào Celery (Bỏ qua {skip_count} creator bị trùng).")
-        logger.info("[*] Celery Worker sẽ tự động cào mới, chạy AI và đẩy sang Deploy Backend.")
+        logger.info(f"[V] HOÀN TẤT! Đã đưa {success_count} Creator mới vào Preflight Queue (Bỏ qua {skip_count} creator bị trùng).")
+        logger.info("[*] Preflight Worker sẽ kiểm tra nhanh, lọc KOC/KOL hợp lệ trước khi kích hoạt Deep Crawl.")
 
     elif mode == "direct":
         logger.info("\n=== CHẾ ĐỘ 2: ĐẨY DỮ LIỆU CÓ SẴN THẲNG VÀO DEPLOY BACKEND & AI DB ===")
@@ -162,6 +186,7 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
             views = float(parse_int_safe(row[col_views])) if col_views else 0.0
             likes = float(parse_int_safe(row[col_likes])) if col_likes else 0.0
             p_url = str(row[col_profile]).strip() if col_profile and not pd.isna(row[col_profile]) else f"https://www.tiktok.com/@{uname}"
+            contact = str(row[col_contact]).strip() if col_contact and not pd.isna(row[col_contact]) else ""
 
             # Tỷ lệ tương tác
             er = 0.0
@@ -186,7 +211,7 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
                 combined_text=combined_text,
                 category=cat,
                 niche=niche,
-                creator_type="KOL" if f_count >= 50000 else "KOC",
+                creator_type="KOL" if f_count >= 500000 else "KOC",
                 followers=f_count,
                 source="EXCEL_IMPORT",
             )
@@ -197,14 +222,31 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
             except Exception:
                 emb = []
 
-            # 3. Đóng gói Payload gửi sang Java Backend Deploy
+            # 3. Tính dataConfidence theo 4 thành phần quy đổi:
+            # Data Confidence = (35% x Nguồn) + (30% x Độ tươi) + (20% x Độ đầy đủ) + (15% x Hợp lý)
+            from app.core.confidence import compute_data_confidence
+            excel_conf = compute_data_confidence(
+                source_type="EXCEL_IMPORT",
+                observed_at=None,
+                avatar_url=avatar,
+                bio=f"Nhà sáng tạo nội dung {cat} - {niche}",
+                followers=f_count,
+                avg_views=views,
+                avg_likes=likes,
+                category=cat,
+                niche=niche,
+                contact=contact,
+                recent_posts=[],
+                er=er,
+            )
+
             java_payload = {
                 "platform": "TIKTOK",
                 "externalId": uname,
                 "userName": f"@{uname}",
                 "displayName": d_name,
                 "avatarUrl": avatar,
-                "creatorType": "KOL" if f_count >= 50000 else "KOC",
+                "creatorType": "KOL" if f_count >= 500000 else "KOC",
                 "location": "Vietnam",
                 "profileUrl": p_url,
                 "followers": f_count,
@@ -215,10 +257,10 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2):
                 "engagementRate": er,
                 "niche": niche,
                 "contentSummary": f"Nhà sáng tạo nội dung {cat} - {niche}",
-                "contact": "",
+                "contact": contact,
                 "category": cat,
                 "freshnessStatus": "FRESH",
-                "dataConfidence": 0.9,
+                "dataConfidence": excel_conf,
                 "recentPosts": [],
                 "embedding": emb,
             }
@@ -253,6 +295,7 @@ if __name__ == "__main__":
         help="Chế độ: 'crawl' (bơm vào Celery cào mới) hoặc 'direct' (đẩy thẳng vào DB Deploy)",
     )
     parser.add_argument("--delay", "-d", type=float, default=0.2, help="Độ trễ (giây) giữa các lần đẩy vào Celery")
+    parser.add_argument("--force", action="store_true", help="Bỏ qua lọc trùng với database cũ để nạp mới toàn bộ")
     args = parser.parse_args()
 
     target_file = args.file
@@ -265,4 +308,4 @@ if __name__ == "__main__":
             logger.error("[-] Vui lòng copy file Excel vào thư mục data/ (ví dụ: data/creators.xlsx) hoặc truyền cờ --file")
             sys.exit(1)
 
-    run_import(target_file, mode=args.mode, delay=args.delay)
+    run_import(target_file, mode=args.mode, delay=args.delay, force=args.force)

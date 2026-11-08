@@ -1,4 +1,7 @@
+import re
 from app.ai.services.embedding_service import embedding_service
+from app.core.confidence import compute_data_confidence
+from app.core.fee_benchmark import get_estimated_fee
 from app.core.models import IngestPayload
 
 
@@ -30,7 +33,11 @@ class JavaMapper:
         )
         niche = result.aiEnrichment.niche if result.aiEnrichment else "General"
         category = result.aiEnrichment.category if result.aiEnrichment else "Lifestyle"
-        content_summary = result.creator.bio or "Creator"
+        content_summary = (
+            result.aiEnrichment.contentSummary
+            if result.aiEnrichment and getattr(result.aiEnrichment, "contentSummary", None)
+            else (result.creator.bio or "Creator")
+        )
 
         # 1. Ghép đoạn text ngữ cảnh để mô hình BKAI Bi-Encoder hiểu sâu nhất
         text_parts = [
@@ -48,6 +55,26 @@ class JavaMapper:
         except Exception as emb_err:
             embedding_vector = []
 
+        # 3. Tính toán dataConfidence theo 4 thành phần quy đổi:
+        # Data Confidence = (35% x Nguồn) + (30% x Độ tươi) + (20% x Độ đầy đủ) + (15% x Hợp lý)
+        data_confidence = compute_data_confidence(
+            source_type=getattr(result, "source", "PUBLIC"),
+            observed_at=getattr(result, "observedAt", None),
+            avatar_url=result.creator.avatarUrl or "",
+            bio=result.creator.bio or "",
+            followers=result.creator.followers or 0,
+            avg_views=result.avg_views or 0.0,
+            avg_likes=result.avg_likes or 0.0,
+            category=category,
+            niche=niche,
+            contact=getattr(result.creator, "publicEmail", None) or getattr(result.creator, "publicPhone", None) or "",
+            recent_posts=result.recentPosts or [],
+            er=result.engagement_rate or 0.0,
+        )
+
+        # 4. Tra cứu giá ước tính tham khảo theo followers (Declarative 0 if-else)
+        est_fee_min, est_fee_max = get_estimated_fee(result.creator.followers)
+
         return {
             "platform": result.creator.platform.value,
             "externalId": result.creator.externalId,
@@ -58,21 +85,29 @@ class JavaMapper:
             "location": "Vietnam",
             "profileUrl": result.creator.profileUrl,
             "followers": result.creator.followers,
+            "estimatedFeeMin": est_fee_min,
+            "estimatedFeeMax": est_fee_max,
+            "actualFee": None,
             "avgViews": result.avg_views,
             "avgLikes": result.avg_likes,
             "avgComments": result.avg_comments,
             "avgShares": result.avg_shares,
             "engagementRate": result.engagement_rate,
+            "engagementRateViews": result.engagement_rate_views,
             "niche": niche,
             "contentSummary": content_summary,
             "contact": getattr(result.creator, "publicEmail", None) or "",
             "category": category,
             "freshnessStatus": "FRESH",
-            "dataConfidence": 0.95,
+            "dataConfidence": data_confidence,
             "crawlRunId": getattr(result, "crawlRunId", ""),
-            "observedAt": result.observedAt.isoformat() if hasattr(result, "observedAt") and result.observedAt else "",
+            "observedAt": result.observedAt.strftime("%Y-%m-%dT%H:%M:%S") if hasattr(result, "observedAt") and result.observedAt else None,
             "isStableExternalId": getattr(result.creator, "isStableExternalId", True),
             "bioCrossLinks": getattr(result.creator, "bioCrossLinks", []),
+            "sourceType": "PUBLIC",
+            "source_type": "PUBLIC",
+            "masterId": None,
+            "master_id": None,
             "recentPosts": recent_posts_list,
             "embedding": embedding_vector,
         }

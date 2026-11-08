@@ -86,3 +86,46 @@ JAVA_BACKEND_URL=http://localhost:8080/api/v1/creators/ingest
 # Redis Queue
 REDIS_URL=redis://localhost:6379/0
 ```
+
+---
+
+## 🤖 5. Công Cụ & Script Hỗ Trợ Tự Động (CLI Tools)
+
+### 5.1. Worker Cào Bài Viết Tự Động (`crawl_recent_posts_worker.py`)
+Worker chạy nền liên tục rà soát các Creator chưa đủ số lượng bài viết hoặc chưa có tương tác chi tiết:
+- **Playwright Stealth**: Giả lập trình duyệt ẩn danh, chống phát hiện bot.
+- **Tự ngắt an toàn khi bị chặn / Captcha**: Khi phát hiện trang xác minh Captcha hoặc bị TikTok chặn tạm thời, script lập tức dừng tiến trình để bảo vệ IP và tài nguyên máy chủ.
+- **Tự động làm sạch tài khoản riêng tư (Private Account)**: Tự động xóa khỏi database những Creator chuyển sang chế độ riêng tư (không cào được bài viết công khai).
+- **Phân loại lại thông minh (Smart KOC / KOL)**: Tự động sửa nhãn định vị kênh dựa trên followers và tương tác thực tế.
+
+```powershell
+# Chạy worker cào bài viết (mặc định delay an toàn 8-15s giữa các request):
+.\venv\Scripts\python.exe -m app.scripts.crawl_recent_posts_worker
+```
+
+### 5.2. Công cụ Import Creator từ Excel/CSV (`import_and_crawl_excel.py`)
+Hỗ trợ nạp hàng nghìn Creator từ file Excel danh sách ngoài:
+- **Lọc trùng lặp thông minh**: Tự động đối chiếu với danh sách cũ để tránh cào trùng hoặc đẩy lặp Creator.
+- **2 Chế độ hoạt động linh hoạt**:
+  - `direct`: Đẩy thẳng thông tin có sẵn vào Deploy Backend & SQLite AI Training DB.
+  - `crawl`: Bơm username vào Celery Preflight Queue để bot tự động vào trang live cào bài viết và số liệu mới nhất.
+
+```powershell
+# Ví dụ nạp dữ liệu từ file Excel:
+.\venv\Scripts\python.exe app\scripts\import_and_crawl_excel.py "data/danh_sach.xlsx" --mode direct
+```
+
+---
+
+## 📊 6. Thang Đo Độ Tin Cậy Dữ Liệu (`dataConfidence`)
+
+Mỗi Creator đẩy sang Backend đều kèm chỉ số `dataConfidence` $\in [0.00, 1.00]$ được tính toán động từ 4 trục tiêu chí:
+$$\text{Data Confidence} = (35\% \times \text{Nguồn}) + (30\% \times \text{Độ tươi}) + (20\% \times \text{Độ đầy đủ}) + (15\% \times \text{Hợp lý})$$
+
+- **Nguồn dữ liệu (35%)**: API chính thức ($1.0$) > Xác minh/Claimed ($0.85$) > Cào Web public/Excel ($0.70$) > AI suy luận ($0.40$).
+- **Độ tươi (30%)**: $\le 7$ ngày ($1.0$) | $7 \div 30$ ngày ($0.5 \div 1.0$) | $> 30$ ngày ($0.2$ - STALE, kích cào lại).
+- **Độ đầy đủ (20%)**: Tỷ lệ các trường không bị NULL/rỗng (Avatar, Bio, Followers, Avg Views, Avg Likes, Category/Niche, Contact).
+- **Tính hợp lý (15%)**: Chỉ số bình thường ($1.0$). Phát hiện chỉ số ảo/dị thường (ER ảo, Views lệch vô lý, 0 bài đăng...) trừ $0.25$/lỗi.
+
+👉 *Xem chi tiết toàn bộ công thức toán học và giải thích thuật toán tại:* **[docs/AI_EXPLANATION_GUIDE.md](docs/AI_EXPLANATION_GUIDE.md)**.
+

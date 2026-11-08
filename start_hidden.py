@@ -16,7 +16,6 @@ commands = [
         "--pool=threads",
         "--concurrency=1",
     ],
-    ["venv\\Scripts\\python.exe", "-m", "app.scripts.discovery_bot"],
 ]
 
 pids = []

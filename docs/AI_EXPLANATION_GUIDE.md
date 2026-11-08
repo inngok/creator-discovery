@@ -33,11 +33,17 @@ $$\text{avgComments} = \frac{1}{N} \sum_{i=1}^{N} \text{comments}_i$$
 $$\text{avgShares} = \frac{1}{N} \sum_{i=1}^{N} \text{shares}_i$$
 
 ### 1.2. Tỷ lệ tương tác tổng thể (Engagement Rate - ER)
-Công thức tính tỷ lệ phần trăm tương tác dựa trên quy mô người theo dõi:
 
-$$\text{Engagement Rate (ER)} = \frac{\text{avgLikes} + \text{avgComments} + \text{avgShares}}{\text{Followers}} \times 100\%$$
+Hệ thống hỗ trợ 2 công thức tính tỷ lệ tương tác tùy theo bản chất thuật toán phân phối nội dung của nền tảng:
 
-*(Nếu $\text{Followers} \le 0$, $\text{ER} = 0.0\%$)*.
+#### A. Follower-based Engagement Rate ($\text{ER}_{\text{followers}}$) - Dành cho nền tảng mạng xã hội truyền thống (Facebook, Instagram feed)
+$$\text{ER}_{\text{followers}} = \frac{\text{avgLikes} + \text{avgComments} + \text{avgShares}}{\text{Followers}} \times 100\%$$
+*(Nếu $\text{Followers} \le 0$, $\text{ER}_{\text{followers}} = 0.0\%$)*.
+
+#### B. View-based Engagement Rate ($\text{ER}_{\text{views}}$) - Dành cho nền tảng video ngắn (TikTok, Reels, Shorts)
+Trên các nền tảng thuật toán video ngắn, Follower không quyết định lượt tiếp cận. Lượt xem phản ánh độ lan tỏa thực tế của video:
+$$\text{ER}_{\text{views}} = \frac{\text{avgLikes} + \text{avgComments} + \text{avgShares}}{\text{avgViews}} \times 100\%$$
+*(Nếu $\text{avgViews} \le 0$, $\text{ER}_{\text{views}} = 0.0\%$)*. Đối với TikTok/Reels, $\text{ER}_{\text{views}}$ phản ánh chính xác chất lượng giữ chân và mức độ tương tác thực của khán giả.
 
 ---
 
@@ -46,17 +52,26 @@ $$\text{Engagement Rate (ER)} = \frac{\text{avgLikes} + \text{avgComments} + \te
 Được chuẩn hóa trên thang điểm $[0, 100]$, phục vụ trực tiếp cho Flow 3 (Recommendation Engine) và hiển thị bảng phân tích cho Brand.
 
 ```
-                    ┌── engagementScore (Chất lượng tương tác vs Benchmark Tier)
-                    ├── followerScore   (Quy mô phù hợp mục tiêu chiến dịch)
-Score Breakdown ────┼── semanticMatchScore (Độ tương đồng Cosine Vector với Brief)
+                    ┌── engagementScore (Chất lượng tương tác vs Benchmark Chuẩn: ER_views hoặc Tier)
+                    ├── followerScore   (Quy mô phù hợp mục tiêu chiến dịch - Phạt phi đối xứng)
+Score Breakdown ────┼── semanticMatchScore (Độ tương đồng ngữ nghĩa sau Min-Max Rescaling [0.30, 0.85])
                     └── nicheMatchScore (Độ trùng khớp danh mục / ngành hàng)
 ```
 
 ---
 
 ### 2.1. Điểm Tương Tác (`engagementScore`)
-- **Bản chất**: Đo lường chất lượng tương tác của Creator so với **mặt bằng chuẩn (Benchmark) của cùng phân khúc quy mô (Tier)**. Tránh việc đánh giá bất công giữa kênh lớn (ER tự nhiên thấp) và kênh nhỏ (ER tự nhiên cao).
-- **Bảng Benchmark theo Tier** (Chuẩn ngành Influencer Marketing):
+- **Bản chất**: Đo lường chất lượng tương tác của Creator so với mặt bằng chuẩn (Benchmark) ngành.
+- **Trường hợp nền tảng video ngắn (TikTok, Reels, Shorts)**:
+  - Sử dụng chỉ số $\text{ER}_{\text{views}}$ với **Benchmark chuẩn ngành video ngắn là $5.0\%$** (mức dao động phổ biến $3\% \div 8\%$, trên $5.0\%$ được đánh giá là xuất sắc).
+  $$\text{engagementScore} = \min\left(100.0, \frac{\text{ER}_{\text{views}}}{5.0\%} \times 100\right)$$
+  - Quy tắc giải thích:
+    - $\text{ER}_{\text{views}} \ge 5.0\%$: *"Tỷ lệ tương tác theo lượt xem ({ER_views}%) vượt chuẩn 5.0% của video ngắn."* (100 điểm).
+    - $\text{Score} \ge 70$: *"Tỷ lệ tương tác theo lượt xem ({ER_views}%) duy trì tốt, đạt mức ổn định của video ngắn."*
+    - $\text{Score} < 70$: *"Tỷ lệ tương tác theo lượt xem ({ER_views}%) ở mức vừa phải."*
+
+- **Trường hợp nền tảng truyền thống hoặc không có dữ liệu views**:
+  - So sánh $\text{ER}_{\text{followers}}$ với **Benchmark chuẩn theo Tier**:
 
 | Phân khúc (Tier) | Khoảng Followers | ER Benchmark chuẩn |
 | :--- | :--- | :--- |
@@ -65,34 +80,36 @@ Score Breakdown ────┼── semanticMatchScore (Độ tương đồng 
 | **Macro Influencer** | $100,000 \le \text{followers} < 1,000,000$ | **$2.0\%$** |
 | **Mega Influencer / KOL** | $\ge 1,000,000$ | **$1.2\%$** |
 
-- **Công thức tính điểm**:
-$$\text{engagementScore} = \min\left(100.0, \frac{\text{ER thực tế}}{\text{ER Benchmark}} \times 100\right)$$
-
-- **Quy tắc giải thích**:
-  - $\text{ER} \ge \text{Benchmark}$: *"Tỷ lệ tương tác {ER}% vượt trội so với mặt bằng chung của các kênh cùng quy mô."* (100 điểm).
-  - $\text{Score} \ge 70$: *"Tỷ lệ tương tác {ER}% duy trì ổn định, bám sát mức trung bình của các kênh cùng quy mô."*
-  - $\text{Score} < 70$: *"Tỷ lệ tương tác {ER}% ở mức vừa phải so với các kênh cùng quy mô."*
+  $$\text{engagementScore} = \min\left(100.0, \frac{\text{ER}_{\text{followers}}}{\text{ER Benchmark}} \times 100\right)$$
 
 ---
 
 ### 2.2. Điểm Quy Mô Phân Khúc (`followerScore`)
-- **Bản chất**: Đánh giá độ tối ưu của phân khúc quy mô người theo dõi đối với mục tiêu chiến dịch.
-- **Thang điểm cơ sở theo phân khúc**:
-  - **Micro ($10\text{k} - 100\text{k}$)**: **95 điểm** (Phân khúc vàng cho các chiến dịch KOC với ROI chuyển đổi cao nhất).
-  - **Mega ($> 1\text{M}$)**: **90 điểm** (Độ phủ thương hiệu cực lớn).
-  - **Macro ($100\text{k} - 1\text{M}$)**: **85 điểm** (Tầm ảnh hưởng mạnh, độ phủ rộng).
-  - **Nano ($< 10\text{k}$)**: **75 điểm** (Hạt giống, chi phí tối thiểu).
+- **Bản chất**: Đánh giá độ tối ưu của phân khúc quy mô người theo dõi đối với mục tiêu chiến dịch. Quy mô Follower biến thiên theo phân phối lũy thừa (Power Law), do đó mọi phép so khớp khoảng cách mục tiêu đều được chuẩn hóa trên thang đo **Logarithm cơ số 10** ($\log_{10}$) kết hợp cơ chế **phạt phi đối xứng (Asymmetric Penalty)** nhằm khắc phục triệt để lỗi toán học bị trừ điểm quá dốc về 0 khi Creator vượt chỉ tiêu Follower.
+
+#### A. Khi có mục tiêu số lượng cụ thể (`TargetFollowers`):
+$$\text{followerScore} = \begin{cases} 
+100.0 & \text{nếu } \text{Followers} = \text{Target} \\
+\max\left(0.0, 100.0 - \left[\log_{10}(\text{Target}) - \log_{10}(\text{Followers})\right] \times 50\right) & \text{nếu } \text{Followers} < \text{Target} \\
+\max\left(50.0, 100.0 - \left[\log_{10}(\text{Followers}) - \log_{10}(\text{Target})\right] \times 30\right) & \text{nếu } \text{Followers} > \text{Target}
+\end{cases}$$
+
+*(Quy tắc phi đối xứng: Khi $\text{Followers} > \text{Target}$, hệ số phạt chỉ là $30$ thay vì $50$ và có ngưỡng chặn dưới $50.0$ điểm, bởi vì kênh có lượng người theo dõi lớn hơn mục tiêu vẫn mang lại giá trị nhận diện thương hiệu vượt mong đợi, không bao giờ bị đánh đồng về $0$ điểm như công thức tuyến tính đối xứng).*
+
+#### B. Khi có khoảng mục tiêu $[\text{TargetMin}, \text{TargetMax}]$:
+$$\text{followerScore} = \begin{cases} 
+100.0 & \text{nếu } \text{TargetMin} \le \text{Followers} \le \text{TargetMax} \\
+\max\left(0.0, 100.0 - \left[\log_{10}(\text{TargetMin}) - \log_{10}(\text{Followers})\right] \times 50\right) & \text{nếu } \text{Followers} < \text{TargetMin} \\
+\max\left(60.0, 100.0 - \left[\log_{10}(\text{Followers}) - \log_{10}(\text{TargetMax})\right] \times 30\right) & \text{nếu } \text{Followers} > \text{TargetMax}
+\end{cases}$$
+
+#### C. Khi không có Target cụ thể (Mặc định theo phân khúc Tier):
+- **Micro ($10\text{k} - 100\text{k}$)**: **95 điểm** (Phân khúc vàng cho các chiến dịch KOC với ROI chuyển đổi cao nhất).
+- **Mega ($> 1\text{M}$)**: **90 điểm** (Độ phủ thương hiệu cực lớn).
+- **Macro ($100\text{k} - 1\text{M}$)**: **85 điểm** (Tầm ảnh hưởng mạnh, độ phủ rộng).
+- **Nano ($< 10\text{k}$)**: **75 điểm** (Hạt giống, chi phí tối thiểu).
 - **Thưởng khớp mục tiêu (Target Match)**:
   - Nếu trong `campaignBrief` có đề cập trực tiếp đến phân khúc của Creator (hoặc brief có từ khóa *"KOC"* và Creator $< 100,000$ followers) $\rightarrow$ Thưởng tối đa **$100.0$ điểm**.
-- **Công thức mở rộng khi có yêu cầu cụ thể (Target / Min - Max)**:
-  - Khi có `targetFollowers`:
-    $$\text{followerScore} = \max\left(0.0, 100 - \frac{|\text{Followers} - \text{Target}|}{\text{Target}} \times 100\right)$$
-  - Khi có khoảng $[\text{Min}, \text{Max}]$:
-    $$\text{followerScore} = \begin{cases} 
-    100.0 & \text{nếu } \text{Min} \le \text{Followers} \le \text{Max} \\
-    \max\left(0.0, 100 - \frac{\text{Min} - \text{Followers}}{\text{Min}} \times 100\right) & \text{nếu } \text{Followers} < \text{Min} \\
-    \max\left(0.0, 100 - \frac{\text{Followers} - \text{Max}}{\text{Max}} \times 100\right) & \text{nếu } \text{Followers} > \text{Max}
-    \end{cases}$$
 
 ---
 
@@ -102,9 +119,20 @@ $$\text{engagementScore} = \min\left(100.0, \frac{\text{ER thực tế}}{\text{E
 - **Công thức Cosine Similarity**:
 $$\text{CosineSimilarity}(\vec{u}, \vec{v}) = \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\|_2 \times \|\vec{v}\|_2} = \frac{\sum_{i=1}^{768} u_i v_i}{\sqrt{\sum_{i=1}^{768} u_i^2} \sqrt{\sum_{i=1}^{768} v_i^2}}$$
 
-- **Quy đổi ra thang điểm 100**:
-$$\text{semanticMatchScore} = \text{similarityScore} \times 100$$
-*(Ví dụ: Cosine Similarity $= 0.82 \rightarrow \text{semanticMatchScore} = 82.0$)*.
+- **Chuẩn hóa Min-Max Rescaling về thang điểm $[0, 100]$**:
+  Các mô hình Bi-Encoder tiếng Việt có giá trị Cosine Similarity thực tế nằm trong khoảng $[0.30, 0.85]$. Nếu nhân trực tiếp với 100, một Creator khá phù hợp (Cosine = 0.55) sẽ chỉ được 55 điểm (gây hiểu nhầm là kém phù hợp). Do đó áp dụng Min-Max Rescaling:
+$$\text{semanticMatchScore} = \begin{cases}
+0.0 & \text{nếu } \text{Cosine} \le 0.30 \\
+100.0 & \text{nếu } \text{Cosine} \ge 0.85 \\
+\text{round}\left(\frac{\text{Cosine} - 0.30}{0.85 - 0.30} \times 100, 1\right) & \text{nếu } 0.30 < \text{Cosine} < 0.85
+\end{cases}$$
+
+- **Bảng quy đổi trực quan**:
+  - $\text{Cosine} = 0.30 \rightarrow \mathbf{0.0}$ điểm.
+  - $\text{Cosine} = 0.55 \rightarrow \mathbf{45.5}$ điểm.
+  - $\text{Cosine} = 0.65 \rightarrow \mathbf{63.6}$ điểm.
+  - $\text{Cosine} = 0.75 \rightarrow \mathbf{81.8}$ điểm.
+  - $\text{Cosine} = 0.85 \rightarrow \mathbf{100.0}$ điểm.
 
 ---
 
@@ -126,21 +154,43 @@ $$\text{semanticMatchScore} = \text{similarityScore} \times 100$$
 
 ## 3. Công Thức Độ Tin Cậy Dữ Liệu (`dataConfidence`)
 
-Trường `dataConfidence` (trong `java_mapper.py`) phản ánh độ tin cậy và mức độ đầy đủ của dữ liệu vừa cào được trước khi đẩy sang Java Backend:
+Trường `dataConfidence` (trong `java_mapper.py` và `import_and_crawl_excel.py`) phản ánh độ tin cậy và chất lượng thực tế của hồ sơ Creator thông qua **4 trục tiêu chí định lượng (Trọng số 100%)**:
 
-$$\text{dataConfidence} = \text{Base} + \sum \text{Bonus Scores}$$
+$$\text{Data Confidence} = (35\% \times \text{Nguồn}) + (30\% \times \text{Độ tươi}) + (20\% \times \text{Độ đầy đủ}) + (15\% \times \text{Hợp lý})$$
 
-- **Mức cơ sở (Base)**: $0.50$
-- **Điểm cộng chất lượng dữ liệu cào**:
-  - Số lượng bài đăng gần nhất:
-    - $\ge 3$ bài: **$+0.20$**
-    - $1 \div 2$ bài: **$+0.10$**
-    - $0$ bài: **$+0.00$**
-  - Có số liệu tương tác thực tế ($\text{avgViews} > 0$ hoặc $\text{avgLikes} > 0$): **$+0.10$**
-  - Hồ sơ đầy đủ (có bio và ảnh đại diện): **$+0.10$**
-  - Phân loại AI thành công (`category` $\neq$ `UNKNOWN` và `niche` $\neq$ `UNKNOWN`): **$+0.10$**
+### 4 Thành phần quy đổi định lượng ($0.0 \div 1.0$):
 
-$$\text{dataConfidence} \in [0.50, 1.00]$$
+1. **Nguồn dữ liệu ($\text{Nguồn} - 35\%$)**:
+   - **$1.00$**: API chính thức của nền tảng (`OFFICIAL_API`, `TIKTOK_API`, `INSTAGRAM_GRAPH_API`, `YOUTUBE_DATA_API`).
+   - **$0.85$**: Creator tự xác minh tài khoản (`AUTHORIZED`, `CLAIMED`, `OAUTH`).
+   - **$0.70$**: Cào Web Public tự động (`PUBLIC`, `WEB_CRAWL`, `PLAYWRIGHT_STEALTH`, `EXCEL_IMPORT`).
+   - **$0.40$**: AI suy luận / Fallback / Chưa xác định.
+
+2. **Độ tươi dữ liệu ($\text{Độ tươi} - 30\%$)**:
+   - **$1.00$**: Dữ liệu mới cập nhật $\le 7$ ngày.
+   - **$0.50 \div 1.00$**: Cập nhật từ $7 \div 30$ ngày (nội suy tuyến tính theo số ngày).
+   - **$0.20$**: Quá $30$ ngày (`STALE` - kích hoạt cơ chế cào lại để làm mới).
+
+3. **Độ đầy đủ trường thông tin ($\text{Độ đầy đủ} - 20\%$)**:
+   - Tỷ lệ các trường quan trọng không bị `NULL` hoặc rỗng (Avatar, Bio, Followers $> 0$, Avg Views $> 0$, Avg Likes $> 0$, Category/Niche cụ thể, Thông tin liên hệ).
+   $$\text{Độ đầy đủ} = \frac{\text{Số trường hợp lệ}}{7}$$
+
+4. **Tính hợp lý dữ liệu ($\text{Hợp lý} - 15\%$)**:
+   - Khởi tạo **$1.00$**, trừ **$0.25$** cho mỗi lỗi bất thường thực sự (Dấu hiệu buff tương tác ảo hoặc dữ liệu rác):
+     - **Tương tác ảo**: $\text{ER}_{\text{views}} > 50\%$ (trên $50\%$ người xem thả like/tim) hoặc có bài đăng nhưng $\text{avgLikes} = 0$.
+     - **Buff View ảo bằng Bot**: $\text{avgViews} > 5,000$ nhưng $\text{avgLikes} = 0$, hoặc $\text{avgViews} > \text{followers} \times 1,000$ mà $\text{avgLikes} < \text{avgViews} \times 0.001$.
+     *(Cơ chế bảo vệ KOC viral: Một KOC mới có 2,000 followers nhưng có 1 video xu hướng đạt 300,000 views với 20,000 likes là hiện tượng viral hoàn toàn tự nhiên và tích cực, hệ thống KHÔNG trừ điểm phạt).*
+     - $\text{followers} \le 0$.
+     - Chưa có bài đăng nào trên kênh ($\text{recentPosts}$ rỗng).
+   $$\text{Hợp lý} = \max\left(0.0, 1.0 - \sum \text{penalties}\right)$$
+
+### Phân loại nghiệp vụ theo thang điểm $\text{dataConfidence} \in [0.0, 1.0]$:
+
+| Mức điểm | Đánh giá chất lượng | Hành động nghiệp vụ hệ thống |
+| :---: | :--- | :--- |
+| **$\ge 0.85$** | Dữ liệu xuất sắc (Đầy đủ tương tác, có liên hệ, số liệu tươi mới) | Tự động duyệt, đưa vào danh sách đề xuất ưu tiên |
+| **$0.70 \div 0.84$** | Dữ liệu đạt chuẩn (Cào web public đầy đủ thông số cơ bản) | Tự động duyệt, lưu trữ phục vụ tìm kiếm |
+| **$< 0.70$** | Dữ liệu sơ cấp / Thiếu trường / Lỗi dị thường / Quá hạn 30 ngày | Đưa vào hàng đợi **Data Manager Review Queue** để duyệt thủ công hoặc kích cào lại |
 
 ---
 

@@ -243,12 +243,7 @@ def _crawl_tiktok_profile_sync(username: str) -> IngestPayload | None:
                     break
                 scroll_amount = random.randint(800, 1500)
                 page.evaluate(f"window.scrollBy(0, {scroll_amount});")
-                try:
-                    page.wait_for_response(
-                        lambda response: "item_list" in response.url, timeout=4000
-                    )
-                except PlaywrightTimeoutError:
-                    page.wait_for_timeout(2000)  # fallback wait if response not seen
+                page.wait_for_timeout(2500)
 
             creator_info = _extract_user_info_from_dom(page, username, url)
 
@@ -266,8 +261,10 @@ def _crawl_tiktok_profile_sync(username: str) -> IngestPayload | None:
         logger.info(
             f"No posts in Network Interception for {username}. Might be blocked or no posts exist."
         )
-        if creator_info and creator_info.bio:
-            logger.info("No recent videos found, AI will fallback to using bio only.")
+        if not creator_info or not creator_info.bio or not creator_info.bio.strip():
+            logger.warning(f"Skipping {username}: No posts and empty bio, skipping empty account.")
+            return None
+        logger.info("No recent videos found, AI will fallback to using bio only.")
 
     if not creator_info:
         return None

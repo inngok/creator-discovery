@@ -195,7 +195,7 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
             # 4. Bóc tách các bài viết gần nhất (Recent Posts)
             articles = soup.find_all("div", attrs={"role": "article"})
             for art in articles:
-                if len(recent_posts) >= 5:
+                if len(recent_posts) >= 3:
                     break
 
                 # Trích xuất Caption

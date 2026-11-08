@@ -106,8 +106,8 @@ class TestPreflightAndStaging(unittest.TestCase):
 
     def test_tier0_search_card_filter(self):
         """Kiểm tra bộ lọc Nấc 0 không tốn HTTP request."""
-        # 1. Candidate dưới 7000 followers -> Bị loại
-        cand_low = {"username": "low_fl", "bio_snippet": "vlog đời sống", "followers": 3000}
+        # 1. Candidate dưới 1000 followers -> Bị loại
+        cand_low = {"username": "low_fl", "bio_snippet": "vlog đời sống", "followers": 500}
         pass1, reason1 = evaluate_tier0_search_card(cand_low)
         self.assertFalse(pass1)
         self.assertIn("DROP_LOW_FOLLOWERS", reason1)

@@ -37,7 +37,7 @@ MIN_POST_PREVIEWS = 5
 KOC_REVIEW_RATIO_THRESHOLD = 0.6  # Ít nhất 3/5 bài review (60%)
 KOC_MIN_OPINION_POSTS = 2         # Ít nhất 2 bài có nhận xét cụ thể ưu/nhược/so sánh
 KOL_REPRESENTATIVE_RATIO_THRESHOLD = 0.6  # Ít nhất 3/5 bài chuyên môn/ảnh hưởng nhất quán
-MIN_FOLLOWERS_THRESHOLD = 7000
+MIN_FOLLOWERS_THRESHOLD = 1000  # Ngưỡng sàn chuẩn quốc tế cho Nano KOC (1.000 followers)
 MAX_PREFLIGHT_RETRIES = 3
 
 

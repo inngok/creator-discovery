@@ -207,10 +207,10 @@ class TestPostValidationAndSafeIngestion(unittest.TestCase):
         """TC21: Luồng Refresh tài khoản cũ (is_refresh=True) -> Cập nhật metrics, không tạo duplicate."""
         username = "existing_creator_tc21"
 
-        # Giả sử creator cũ có follower dao động còn 6,500 (< 7,000 threshold)
-        payload = self._create_mock_ingest_payload(username, followers=6500)
+        # Giả sử creator cũ có follower dao động còn 800 (< 1,000 threshold)
+        payload = self._create_mock_ingest_payload(username, followers=800)
 
-        # Với is_refresh=False -> Bị chặn vì follower < 7000
+        # Với is_refresh=False -> Bị chặn vì follower < 1000
         val_normal = validate_post_crawl(payload, is_refresh=False)
         self.assertFalse(val_normal.is_valid)
 

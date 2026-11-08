@@ -88,11 +88,6 @@ async def crawl_tiktok(username: str):
         raise HTTPException(status_code=500, detail=f"Failed to crawl TikTok: {e}")
 
 
-@router.post("/tiktok/enqueue", summary="Đưa Creator TikTok vào hàng đợi (Preflight Gate mặc định)")
-async def enqueue_tiktok(username: str, force_deep_crawl: bool = False) -> dict:
-    return _dispatch_enqueue("TIKTOK", username, force_deep_crawl)
-
-
 @router.get("/facebook", response_model=IngestPayload, summary="Cào trực tiếp Facebook")
 async def crawl_facebook(username: str):
     try:
@@ -107,11 +102,6 @@ async def crawl_facebook(username: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to crawl Facebook: {e}")
-
-
-@router.post("/facebook/enqueue", summary="Đưa Creator Facebook vào hàng đợi (Preflight Gate mặc định)")
-async def enqueue_facebook(username: str, force_deep_crawl: bool = False) -> dict:
-    return _dispatch_enqueue("FACEBOOK", username, force_deep_crawl)
 
 
 @router.get("/instagram", response_model=IngestPayload, summary="Cào trực tiếp Instagram")
@@ -130,11 +120,6 @@ async def crawl_instagram(username: str):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to crawl Instagram: {e}")
-
-
-@router.post("/instagram/enqueue", summary="Đưa Creator Instagram vào hàng đợi (Preflight Gate mặc định)")
-async def enqueue_instagram(username: str, force_deep_crawl: bool = False) -> dict:
-    return _dispatch_enqueue("INSTAGRAM", username, force_deep_crawl)
 
 
 from app.services.shortlist_crawl_service import trigger_shortlist_crawl_background
@@ -167,18 +152,30 @@ async def trigger_shortlist_crawl(request: ShortlistTriggerRequest) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class TriggerWeeklyDiscoveryRequest(BaseModel):
+    max_new_kocs: int = Field(default=30, description="Số lượng KOC mới tối đa cần khám phá")
+    keywords: Optional[list[str]] = Field(
+        default=None,
+        description="Danh sách từ khóa săn lùng chỉ định (nếu bỏ trống sẽ lấy từ DB discovery_keyword hoặc mặc định)",
+    )
+
+
 @router.post("/trigger-weekly-discovery", summary="Kích hoạt thủ công luồng cào tự động tìm KOC mới (Weekly Discovery)")
-async def trigger_weekly_discovery(max_new_kocs: int = 30) -> dict:
-    """Cho phép kích hoạt ngay luồng cào tự động KOC mới (thay vì đợi đến 3h sáng Thứ Hai)."""
+async def trigger_weekly_discovery(req: Optional[TriggerWeeklyDiscoveryRequest] = None) -> dict:
+    """Cho phép kích hoạt ngay luồng cào tự động KOC mới theo từ khóa (hoặc mặc định/DB)."""
     try:
         from app.workers.tasks import weekly_discover_new_creators_task
 
-        task = weekly_discover_new_creators_task.delay(max_new_kocs=max_new_kocs)
+        max_kocs = req.max_new_kocs if req and req.max_new_kocs > 0 else 30
+        kw = req.keywords if req else None
+
+        task = weekly_discover_new_creators_task.delay(max_new_kocs=max_kocs, keywords=kw)
         return {
             "status": "QUEUED",
             "message": f"Đã kích hoạt luồng cào KOC mới tự động vào Celery! Task ID: {task.id}",
             "taskId": task.id,
-            "maxNewKocs": max_new_kocs,
+            "maxNewKocs": max_kocs,
+            "keywords": kw,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -215,19 +212,6 @@ class ResolveAuthorRequest(BaseModel):
     )
 
 
-class PreflightResolveAuthorRequest(BaseModel):
-    platform: str = Field(default="TIKTOK", description="Nền tảng (mặc định: TIKTOK)")
-    username: str = Field(..., description="Username hiện tại của KOC")
-    expected_external_id: Optional[str] = Field(
-        default=None,
-        description="External ID (Author ID số cố định) lưu trong DB để đối soát"
-    )
-    auto_update_staging: bool = Field(
-        default=True,
-        description="Tự động cập nhật username mới vào DB Staging nếu trùng khớp Author ID"
-    )
-
-
 @router.post(
     "/tiktok/resolve-author",
     summary="Bóc tách Author ID TikTok qua SSR và đối soát KOC đổi tên",
@@ -241,52 +225,6 @@ async def resolve_tiktok_author(req: ResolveAuthorRequest) -> dict:
     result = await asyncio.to_thread(
         PreflightService.resolve_author_id,
         platform="TIKTOK",
-        username=clean_user,
-        expected_external_id=req.expected_external_id,
-        auto_update_staging=req.auto_update_staging,
-    )
-    if result.get("status") == "error":
-        raise HTTPException(status_code=404, detail=result.get("message", "Không thể lấy thông tin tác giả"))
-    return result
-
-
-@router.get(
-    "/tiktok/resolve-author",
-    summary="Tra cứu nhanh Author ID TikTok qua query params (SSR Preflight)",
-)
-async def get_tiktok_author(
-    username: str,
-    expected_external_id: Optional[str] = None,
-    auto_update_staging: bool = True,
-) -> dict:
-    clean_user = username.removeprefix("@").strip()
-    if not clean_user:
-        raise HTTPException(status_code=400, detail="Username không được để trống")
-
-    result = await asyncio.to_thread(
-        PreflightService.resolve_author_id,
-        platform="TIKTOK",
-        username=clean_user,
-        expected_external_id=expected_external_id,
-        auto_update_staging=auto_update_staging,
-    )
-    if result.get("status") == "error":
-        raise HTTPException(status_code=404, detail=result.get("message", "Không thể lấy thông tin tác giả"))
-    return result
-
-
-@router.post(
-    "/preflight/resolve-author",
-    summary="Đối soát Author ID tổng quát qua Preflight SSR Gate",
-)
-async def resolve_preflight_author(req: PreflightResolveAuthorRequest) -> dict:
-    clean_user = req.username.removeprefix("@").strip()
-    if not clean_user:
-        raise HTTPException(status_code=400, detail="Username không được để trống")
-
-    result = await asyncio.to_thread(
-        PreflightService.resolve_author_id,
-        platform=req.platform,
         username=clean_user,
         expected_external_id=req.expected_external_id,
         auto_update_staging=req.auto_update_staging,

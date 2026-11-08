@@ -472,20 +472,61 @@ DISCOVERY_KEYWORDS_VI = [
 
 
 @app.task(bind=True, queue="default")
-def weekly_discover_new_creators_task(self, max_new_kocs: int = 30) -> dict:
+def weekly_discover_new_creators_task(
+    self,
+    max_new_kocs: int = 30,
+    keywords: Optional[list[str]] = None,
+) -> dict:
     """
-    Task chạy định kỳ hàng tuần trên Celery Beat:
-    - Quét tìm kiếm ứng viên trên các chuyên mục ngành nghề phổ biến.
+    Task chạy định kỳ hàng tuần trên Celery Beat hoặc do Manager kích hoạt:
+    - Quét tìm kiếm ứng viên trên các chuyên mục ngành nghề phổ biến hoặc từ khóa tùy chỉnh.
+    - Tự động lấy từ khóa TARGET đang active trong DB nếu không truyền trực tiếp.
     - LOẠI BỎ 100% KOC CŨ ĐÃ CÓ TRONG HỆ THỐNG (Chỉ chọn KOC mới toanh).
     - Đưa KOC mới vào hàng đợi Preflight để lọc tự động (Rule Engine BR-01 -> BR-06)
       và Deep Crawl nếu đạt chuẩn.
     """
-    logger.info(f"[WEEKLY DISCOVERY] Bắt đầu luồng cào tự động hàng tuần tìm KOC MỚI (Tối đa {max_new_kocs} KOC)...")
+    logger.info(f"[WEEKLY DISCOVERY] Bắt đầu luồng cào tự động tìm KOC MỚI (Tối đa {max_new_kocs} KOC)...")
     try:
         from app.crawlers.discovery_crawler import search_new_tiktok_candidates
 
+        search_keywords = [k.strip() for k in keywords if k and k.strip()] if keywords else []
+        if not search_keywords:
+            try:
+                import psycopg2
+
+                db_host = os.environ.get("DB_HOST", "221.121.3.226")
+                db_user = os.environ.get("DB_USER", "influencermatch_user")
+                db_pass = os.environ.get("DB_PASSWORD", "12345")
+                db_name = os.environ.get("DB_NAME", "influencermatch_dev")
+
+                conn = psycopg2.connect(
+                    host=db_host,
+                    user=db_user,
+                    password=db_pass,
+                    dbname=db_name,
+                    connect_timeout=5,
+                )
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT keyword FROM discovery_keyword WHERE is_active = true AND keyword_type = 'TARGET'"
+                )
+                rows = cur.fetchall()
+                conn.close()
+                db_keywords = [r[0].strip() for r in rows if r[0] and r[0].strip()]
+                if db_keywords:
+                    search_keywords = db_keywords
+                    logger.info(
+                        f"[WEEKLY DISCOVERY] Đã nạp {len(search_keywords)} từ khóa TARGET từ PostgreSQL: {search_keywords}"
+                    )
+            except Exception as db_err:
+                logger.debug(f"[WEEKLY DISCOVERY] Không lấy được từ khóa từ DB ({db_err}), sử dụng mặc định.")
+
+        if not search_keywords:
+            search_keywords = DISCOVERY_KEYWORDS_VI
+            logger.info(f"[WEEKLY DISCOVERY] Sử dụng bộ từ khóa mặc định: {search_keywords}")
+
         candidates = search_new_tiktok_candidates(
-            keywords=DISCOVERY_KEYWORDS_VI,
+            keywords=search_keywords,
             max_per_keyword=8,
             max_total=max_new_kocs * 2,  # Quét rộng để trừ hao các KOC cũ
         )

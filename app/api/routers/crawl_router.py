@@ -158,23 +158,31 @@ class TriggerWeeklyDiscoveryRequest(BaseModel):
         default=None,
         description="Danh sách từ khóa săn lùng chỉ định (nếu bỏ trống sẽ lấy từ DB discovery_keyword hoặc mặc định)",
     )
+    platform: Optional[str] = Field(
+        default="ALL",
+        description="Nền tảng săn lùng KOC mới: ALL, TIKTOK, hoặc FACEBOOK",
+    )
 
 
 @router.post("/trigger-weekly-discovery", summary="Kích hoạt thủ công luồng cào tự động tìm KOC mới (Weekly Discovery)")
 async def trigger_weekly_discovery(req: Optional[TriggerWeeklyDiscoveryRequest] = None) -> dict:
-    """Cho phép kích hoạt ngay luồng cào tự động KOC mới theo từ khóa (hoặc mặc định/DB)."""
+    """Cho phép kích hoạt ngay luồng cào tự động KOC mới theo từ khóa và nền tảng (ALL / TIKTOK / FACEBOOK)."""
     try:
         from app.workers.tasks import weekly_discover_new_creators_task
 
         max_kocs = req.max_new_kocs if req and req.max_new_kocs > 0 else 30
         kw = req.keywords if req else None
+        plat = (req.platform if req and req.platform else "ALL").strip().upper()
 
-        task = weekly_discover_new_creators_task.delay(max_new_kocs=max_kocs, keywords=kw)
+        task = weekly_discover_new_creators_task.delay(
+            max_new_kocs=max_kocs, keywords=kw, platform=plat
+        )
         return {
             "status": "QUEUED",
-            "message": f"Đã kích hoạt luồng cào KOC mới tự động vào Celery! Task ID: {task.id}",
+            "message": f"Đã kích hoạt luồng cào KOC mới tự động ({plat}) vào Celery! Task ID: {task.id}",
             "taskId": task.id,
             "maxNewKocs": max_kocs,
+            "platform": plat,
             "keywords": kw,
         }
     except Exception as e:

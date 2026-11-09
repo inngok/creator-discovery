@@ -476,18 +476,26 @@ def weekly_discover_new_creators_task(
     self,
     max_new_kocs: int = 30,
     keywords: Optional[list[str]] = None,
+    platform: str = "ALL",
 ) -> dict:
     """
     Task chạy định kỳ hàng tuần trên Celery Beat hoặc do Manager kích hoạt:
     - Quét tìm kiếm ứng viên trên các chuyên mục ngành nghề phổ biến hoặc từ khóa tùy chỉnh.
+    - Hỗ trợ đa nền tảng: TIKTOK, FACEBOOK hoặc ALL (quét cả 2).
     - Tự động lấy từ khóa TARGET đang active trong DB nếu không truyền trực tiếp.
     - LOẠI BỎ 100% KOC CŨ ĐÃ CÓ TRONG HỆ THỐNG (Chỉ chọn KOC mới toanh).
     - Đưa KOC mới vào hàng đợi Preflight để lọc tự động (Rule Engine BR-01 -> BR-06)
       và Deep Crawl nếu đạt chuẩn.
     """
-    logger.info(f"[WEEKLY DISCOVERY] Bắt đầu luồng cào tự động tìm KOC MỚI (Tối đa {max_new_kocs} KOC)...")
+    target_platform = (platform or "ALL").strip().upper()
+    logger.info(
+        f"[WEEKLY DISCOVERY] Bắt đầu luồng cào tự động tìm KOC MỚI ({target_platform}) (Tối đa {max_new_kocs} KOC)..."
+    )
     try:
-        from app.crawlers.discovery_crawler import search_new_tiktok_candidates
+        from app.crawlers.discovery_crawler import (
+            search_new_facebook_candidates,
+            search_new_tiktok_candidates,
+        )
 
         search_keywords = [k.strip() for k in keywords if k and k.strip()] if keywords else []
         if not search_keywords:
@@ -525,11 +533,25 @@ def weekly_discover_new_creators_task(
             search_keywords = DISCOVERY_KEYWORDS_VI
             logger.info(f"[WEEKLY DISCOVERY] Sử dụng bộ từ khóa mặc định: {search_keywords}")
 
-        candidates = search_new_tiktok_candidates(
-            keywords=search_keywords,
-            max_per_keyword=8,
-            max_total=max_new_kocs * 2,  # Quét rộng để trừ hao các KOC cũ
-        )
+        candidates: list[dict] = []
+
+        # 1. Quét TikTok nếu yêu cầu TIKTOK hoặc ALL/BOTH
+        if target_platform in ["ALL", "BOTH", "TIKTOK"]:
+            tiktok_candidates = search_new_tiktok_candidates(
+                keywords=search_keywords,
+                max_per_keyword=8,
+                max_total=max_new_kocs * 2,  # Quét rộng để trừ hao các KOC cũ
+            )
+            candidates.extend(tiktok_candidates)
+
+        # 2. Quét Facebook nếu yêu cầu FACEBOOK hoặc ALL/BOTH
+        if target_platform in ["ALL", "BOTH", "FACEBOOK"]:
+            fb_candidates = search_new_facebook_candidates(
+                keywords=search_keywords,
+                max_per_keyword=8,
+                max_total=max_new_kocs * 2,
+            )
+            candidates.extend(fb_candidates)
 
         new_enqueued = 0
         skipped_old = 0
@@ -538,7 +560,7 @@ def weekly_discover_new_creators_task(
             if new_enqueued >= max_new_kocs:
                 break
 
-            platform = cand.get("platform", "TIKTOK")
+            cand_platform = cand.get("platform", "TIKTOK").upper()
             username = cand.get("username", "").strip()
             clean_user = username.removeprefix("@").strip().lower()
 
@@ -547,17 +569,17 @@ def weekly_discover_new_creators_task(
 
             # 🚨 KIỂM TRA CHỐNG CÀO KOC CŨ:
             # Nếu username đã có trong staging database -> Bỏ qua tuyệt đối!
-            existing = staging_repo.get_candidate(platform, clean_user)
+            existing = staging_repo.get_candidate(cand_platform, clean_user)
             if existing is not None:
                 skipped_old += 1
-                logger.debug(f"[WEEKLY DISCOVERY] Bỏ qua KOC CŨ: {platform} @{clean_user} (đã có trong DB)")
+                logger.debug(f"[WEEKLY DISCOVERY] Bỏ qua KOC CŨ: {cand_platform} @{clean_user} (đã có trong DB)")
                 continue
 
             # Đây là KOC HOÀN TOÀN MỚI -> Đưa vào hàng đợi Preflight Task
-            preflight_candidate_task.delay(platform, clean_user)
+            preflight_candidate_task.delay(cand_platform, clean_user)
             new_enqueued += 1
             logger.info(
-                f"[WEEKLY DISCOVERY ENQUEUE] Đã phát hiện và đưa KOC MỚI @{clean_user} "
+                f"[WEEKLY DISCOVERY ENQUEUE] Đã phát hiện và đưa KOC MỚI ({cand_platform}) @{clean_user} "
                 f"({cand.get('followers', 0)} fl) vào Preflight Queue ({new_enqueued}/{max_new_kocs})"
             )
 

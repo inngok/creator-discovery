@@ -106,3 +106,86 @@ def search_new_tiktok_candidates(
             logger.error(f"[DISCOVERY] Lỗi khởi tạo Playwright Discovery: {e}")
 
     return discovered
+
+
+def search_new_facebook_candidates(
+    keywords: list[str], max_per_keyword: int = 10, max_total: int = 30
+) -> list[dict]:
+    """
+    Quét trang tìm kiếm Facebook Pages theo từ khóa để tự động săn lùng các Fanpage / KOC MỚI.
+    Trả về danh sách dict chứa: {username, display_name, followers, bio_snippet, profile_url, platform}
+    """
+    discovered: list[dict] = []
+    seen_usernames = set()
+
+    with sync_playwright() as p:
+        try:
+            from app.crawlers.facebook_crawler import (
+                _init_facebook_playwright_context,
+                dismiss_facebook_dialogs,
+            )
+            from app.crawlers.search_extractor import extract_facebook_search_card_candidates
+
+            context, _ = _init_facebook_playwright_context(p)
+            stealth = Stealth()
+            page = context.new_page()
+            stealth.apply_stealth_sync(page)
+
+            for kw in keywords:
+                if len(discovered) >= max_total:
+                    break
+
+                logger.info(f"[DISCOVERY FB] Đang quét từ khóa Facebook: '{kw}'...")
+                encoded_kw = urllib.parse.quote(kw)
+                search_url = f"https://www.facebook.com/search/pages/?q={encoded_kw}"
+
+                try:
+                    page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
+                    page.wait_for_timeout(3500)
+                    dismiss_facebook_dialogs(page)
+
+                    # Cuộn trang 2-3 lần để tải thêm thẻ Fanpage
+                    for _ in range(3):
+                        page.mouse.wheel(0, 1500)
+                        page.wait_for_timeout(1500)
+
+                    html = page.content()
+                    candidates = extract_facebook_search_card_candidates(html)
+                    kw_count = 0
+
+                    for cand in candidates:
+                        username = cand.get("username", "").strip()
+                        if not username or username.lower() in seen_usernames:
+                            continue
+
+                        seen_usernames.add(username.lower())
+
+                        pass_tier0, drop_reason = evaluate_tier0_search_card(cand)
+                        if not pass_tier0:
+                            logger.debug(f"[DISCOVERY FB TIER-0 DROP] Bỏ qua {username}: {drop_reason}")
+                            continue
+
+                        cand["platform"] = "FACEBOOK"
+                        discovered.append(cand)
+                        kw_count += 1
+
+                        if kw_count >= max_per_keyword or len(discovered) >= max_total:
+                            break
+
+                    logger.info(
+                        f"[DISCOVERY FB] Quét xong từ khóa '{kw}': Tìm thấy {kw_count} Fanpage/KOC tiềm năng."
+                    )
+                    page.wait_for_timeout(2000)
+
+                except Exception as kw_err:
+                    logger.warning(f"[DISCOVERY FB] Lỗi khi quét từ khóa '{kw}': {kw_err}")
+                    continue
+
+            if context and context.browser:
+                context.browser.close()
+            elif context:
+                context.close()
+        except Exception as e:
+            logger.error(f"[DISCOVERY FB] Lỗi khởi tạo Playwright Discovery FB: {e}")
+
+    return discovered

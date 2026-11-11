@@ -53,39 +53,61 @@ class CategoryDiscoveryService:
             {"code": "LIFESTYLE", "label": "Đời sống, Sức khỏe & Gia đình", "icon": "🏡"},
         ]
 
-    def get_candidates_by_category(self, category_code: str, limit: int = 5) -> list[dict[str, Any]]:
+    def get_candidates_by_category(
+        self, category_code: str, limit: int = 5, platform: str = "ALL"
+    ) -> list[dict[str, Any]]:
         norm_code = category_code.upper().strip()
-        matched_tags = CATEGORY_TAXONOMY_MAP.get(norm_code, [norm_code])
+        plat_upper = (platform or "ALL").upper().strip()
 
-        if self._cache_df is None or self._cache_df.empty:
-            return []
+        candidates: list[dict[str, Any]] = []
 
-        pattern = "|".join([re.escape(t) for t in matched_tags])
-        sub_df = self._cache_df[
-            self._cache_df["Phân loại Nhà sáng tạo"].astype(str).str.contains(pattern, case=False, na=False)
-        ]
+        # 1. Lấy dữ liệu thực từ cache hệ thống (Dataset đã tải)
+        if self._cache_df is not None and not self._cache_df.empty:
+            matched_tags = CATEGORY_TAXONOMY_MAP.get(norm_code, [norm_code])
+            pattern = "|".join([re.escape(t) for t in matched_tags])
+            sub_df = self._cache_df[
+                self._cache_df["Phân loại Nhà sáng tạo"].astype(str).str.contains(pattern, case=False, na=False)
+            ]
 
-        SHOP_KEYWORDS = ["shop", "store", "tongkho", "bansi", "sile", "khohang", "order", "boutique"]
-        candidates = []
-        for _, row in sub_df.iterrows():
-            uname = str(row["ID Chuyên gia"]).strip().removeprefix("@")
-            dname = str(row.get("Biệt danh chuyên gia", uname))
-            check_text = f"{uname} {dname}".lower()
-            # Bỏ qua tài khoản có chữ shop, store, tổng kho...
-            if any(k in check_text for k in SHOP_KEYWORDS):
-                continue
-            candidates.append({
-                "username": uname,
-                "display_name": dname,
-                "category": str(row.get("Phân loại Nhà sáng tạo", norm_code)),
-                "avatar_hint": str(row.get("Ảnh hồ sơ Chuyên gia", "")),
-                "profile_url": f"https://www.tiktok.com/@{uname}",
-            })
-            if len(candidates) >= limit:
-                break
+            SHOP_KEYWORDS = [
+                "shop", "store", "tongkho", "bansi", "sile", "khohang", "order", "boutique",
+                "cuahang", "sieu.tichcuc", "donhang", "hoantien", "1doi1", "xakho", "thanhly"
+            ]
+            for _, row in sub_df.iterrows():
+                uname = str(row["ID Chuyên gia"]).strip().removeprefix("@")
+                dname = str(row.get("Biệt danh chuyên gia", uname))
+                check_text = f"{uname} {dname}".lower()
+                if any(k in check_text for k in SHOP_KEYWORDS):
+                    continue
+                candidates.append({
+                    "username": uname,
+                    "display_name": dname,
+                    "category": str(row.get("Phân loại Nhà sáng tạo", norm_code)),
+                    "platform": "TIKTOK",
+                    "avatar_hint": str(row.get("Ảnh hồ sơ Chuyên gia", "")),
+                    "profile_url": f"https://www.tiktok.com/@{uname}",
+                })
+                if len(candidates) >= limit:
+                    break
 
-        return candidates
+        # 2. Nếu người dùng chỉ định FACEBOOK: Tìm trong Staging DB thực tế
+        if plat_upper == "FACEBOOK":
+            from app.core.candidate_staging import staging_repo
+            fb_records, _ = staging_repo.list_candidates(limit=50)
+            fb_list = [
+                {
+                    "username": r.username,
+                    "display_name": r.display_name or r.username,
+                    "category": norm_code,
+                    "platform": "FACEBOOK",
+                    "profile_url": r.profile_url,
+                }
+                for r in fb_records
+                if r.platform == "FACEBOOK"
+            ]
+            return fb_list[:limit]
+
+        return candidates[:limit]
 
 
 category_discovery_service = CategoryDiscoveryService()
-

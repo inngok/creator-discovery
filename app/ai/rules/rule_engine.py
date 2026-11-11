@@ -44,33 +44,18 @@ class RuleEngine:
         # ------------------------------------------------------------------
         # BƯỚC 1: BR-01 — ENTITY HARD REJECT GATE
         # ------------------------------------------------------------------
-        # A. Kiểm tra Brand / Official Store / Tổng kho
-        # Điều kiện: Bio bán sỉ/tổng kho VÀ phần lớn bài đăng là catalog/thương mại
-        is_commercial_store = (
-            evidence.has_commercial_bio
-            and (
-                evidence.commercial_post_count >= 3
-                or evidence.spam_catalog_post_count >= 3
-                or (evidence.total_posts > 0 and evidence.commercial_post_ratio >= 0.6)
-            )
-        )
-        # Hoặc bio tổng kho rõ rệt và không hề có bất kỳ bài review/cá nhân nào
-        is_pure_wholesale = (
-            evidence.has_commercial_bio
-            and evidence.koc_review_post_count == 0
-            and evidence.expertise_post_count == 0
-            and not evidence.has_creator_persona
-        )
-
-        if is_commercial_store or is_pure_wholesale:
-            reasons.append("BR01_REJECT_COMMERCIAL_STORE")
-            return RuleDecisionResult(
-                decision=Decision.AUTO_REJECT,
-                primary_type="BRAND",
-                reason_codes=reasons,
-                matched_signals=evidence.matched_signals,
-                evidence=evidence.raw_metrics,
-            )
+        # A. Kiểm tra Brand / Official Store / Shop / Merchant Bán hàng
+        if evidence.has_commercial_bio or evidence.commercial_post_count >= 2:
+            # Nếu có ít nhất 3 bài review chuyên sâu, creator có shop riêng được chuyển sang BR-06 xem xét
+            if evidence.koc_review_post_count < 3:
+                reasons.append("BR01_REJECT_COMMERCIAL_STORE")
+                return RuleDecisionResult(
+                    decision=Decision.AUTO_REJECT,
+                    primary_type="BRAND",
+                    reason_codes=reasons,
+                    matched_signals=evidence.matched_signals,
+                    evidence=evidence.raw_metrics,
+                )
 
         # B. Kiểm tra Cơ quan nhà nước, Báo chí, Đài truyền hình
         if evidence.has_state_media_bio or evidence.state_media_post_count >= 3:
@@ -99,8 +84,35 @@ class RuleEngine:
         # ------------------------------------------------------------------
         # Khi cào live hồ sơ chưa có bài post: Đánh giá theo Tier-0 (Ngưỡng followers và nhận diện cá nhân)
         if evidence.total_posts == 0:
-            if profile.followers >= 200000:
-                reasons.append("TIER0_AUTO_ACCEPT_KOL_FOLLOWERS")
+            if profile.followers < 7000:
+                reasons.append("TIER0_REJECT_LOW_FOLLOWERS")
+                return RuleDecisionResult(
+                    decision=Decision.AUTO_REJECT,
+                    primary_type="UNKNOWN",
+                    reason_codes=reasons,
+                    matched_signals=evidence.matched_signals,
+                    evidence=evidence.raw_metrics,
+                )
+
+            # Bio mơ hồ, không có từ khóa review / unboxing / chia sẻ và không có tick xanh -> SKIP_INSUFFICIENT
+            if not evidence.has_koc_review_bio and not (profile.is_verified or evidence.has_influence_signal or evidence.has_expertise_title):
+                reasons.append("BR08_INSUFFICIENT_DATA")
+                return RuleDecisionResult(
+                    decision=Decision.SKIP_INSUFFICIENT,
+                    primary_type="UNKNOWN",
+                    reason_codes=reasons,
+                    matched_signals=evidence.matched_signals,
+                    evidence=evidence.raw_metrics,
+                )
+
+            # Chỉ công nhận KOL khi tài khoản được tick xanh chính thức (verified) hoặc có danh xưng uy tín/chuyên gia
+            is_genuine_kol = (
+                profile.followers >= 200000
+                and (profile.is_verified or evidence.has_influence_signal or evidence.has_expertise_title)
+            )
+
+            if is_genuine_kol:
+                reasons.append("TIER0_AUTO_ACCEPT_KOL")
                 return RuleDecisionResult(
                     decision=Decision.AUTO_ACCEPT_KOL,
                     primary_type="KOL",
@@ -108,22 +120,13 @@ class RuleEngine:
                     matched_signals=evidence.matched_signals + ["TIER0_KOL_MET"],
                     evidence=evidence.raw_metrics,
                 )
-            elif profile.followers >= 7000:
-                reasons.append("TIER0_AUTO_ACCEPT_KOC_FOLLOWERS")
+            else:
+                reasons.append("TIER0_AUTO_ACCEPT_KOC")
                 return RuleDecisionResult(
                     decision=Decision.AUTO_ACCEPT_KOC,
                     primary_type="KOC",
                     reason_codes=reasons,
                     matched_signals=evidence.matched_signals + ["TIER0_KOC_MET"],
-                    evidence=evidence.raw_metrics,
-                )
-            else:
-                reasons.append("TIER0_REJECT_LOW_FOLLOWERS")
-                return RuleDecisionResult(
-                    decision=Decision.AUTO_REJECT,
-                    primary_type="UNKNOWN",
-                    reason_codes=reasons,
-                    matched_signals=evidence.matched_signals,
                     evidence=evidence.raw_metrics,
                 )
 

@@ -100,7 +100,7 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
         video_count = len(fb_payload.recentPosts)
         bio = creator.bio or ""
         avatar_url = creator.avatarUrl or ""
-        is_verified = bool(creator.isVerified)
+        is_verified = bool(getattr(creator, "isVerified", False))
         profile_url = creator.profileUrl or f"https://www.facebook.com/{unique_id}"
         recent_posts = [
             {
@@ -111,7 +111,7 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
                 "likes": p.likes or 0,
                 "comments": p.comments or 0,
                 "shares": p.shares or 0,
-                "coverUrl": p.coverUrl or "",
+                "coverUrl": getattr(p, "coverUrl", "") or "",
                 "postedAt": p.postedAt,
             }
             for p in fb_payload.recentPosts
@@ -148,7 +148,7 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
         video_count = len(ig_payload.recentPosts)
         bio = creator.bio or ""
         avatar_url = creator.avatarUrl or ""
-        is_verified = bool(creator.isVerified)
+        is_verified = bool(getattr(creator, "isVerified", False))
         profile_url = creator.profileUrl or f"https://www.instagram.com/{unique_id}"
         recent_posts = [
             {
@@ -159,7 +159,7 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
                 "likes": p.likes or 0,
                 "comments": p.comments or 0,
                 "shares": p.shares or 0,
-                "coverUrl": p.coverUrl or "",
+                "coverUrl": getattr(p, "coverUrl", "") or "",
                 "postedAt": p.postedAt,
             }
             for p in ig_payload.recentPosts

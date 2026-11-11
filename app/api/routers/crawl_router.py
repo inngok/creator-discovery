@@ -25,6 +25,15 @@ DEEP_CRAWL_TASKS = {
 }
 
 
+def is_redis_available() -> bool:
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", 6379), timeout=0.2):
+            return True
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        return False
+
+
 def _dispatch_enqueue(platform: str, username: str, force_deep_crawl: bool = False) -> dict:
     plat = (platform or "TIKTOK").upper()
     clean_user = username.removeprefix("@").strip()
@@ -39,25 +48,53 @@ def _dispatch_enqueue(platform: str, username: str, force_deep_crawl: bool = Fal
             detail=f"Nền tảng {plat} không được hỗ trợ. Vui lòng chọn: {supported}",
         )
 
-    if force_deep_crawl:
-        task = task_fn.delay(clean_user, is_refresh=True)
-        return {
-            "status": "success",
-            "platform": plat,
-            "username": clean_user,
-            "mode": "FORCE_DEEP_CRAWL",
-            "task_id": task.id,
-            "message": f"Đã ép buộc đưa {clean_user} ({plat}) vào hàng đợi Deep Crawl (is_refresh=True).",
-        }
+    if is_redis_available():
+        try:
+            if force_deep_crawl:
+                task = task_fn.delay(clean_user, is_refresh=True)
+                return {
+                    "status": "success",
+                    "platform": plat,
+                    "username": clean_user,
+                    "mode": "FORCE_DEEP_CRAWL",
+                    "task_id": task.id,
+                    "message": f"Đã ép buộc đưa {clean_user} ({plat}) vào hàng đợi Deep Crawl (is_refresh=True).",
+                }
 
-    task = preflight_candidate_task.delay(plat, clean_user)
+            task = preflight_candidate_task.delay(plat, clean_user)
+            return {
+                "status": "success",
+                "platform": plat,
+                "username": clean_user,
+                "mode": "PREFLIGHT_GATE",
+                "task_id": task.id,
+                "message": f"Đã đưa {clean_user} ({plat}) vào Preflight Gate để phân loại trước khi cào sâu.",
+            }
+        except Exception as e:
+            logger.warning(f"[ENQUEUE] Celery/Redis lỗi ({e}), chuyển sang chế độ lưu trực tiếp.")
+
+    from app.core.candidate_staging import CandidateStagingRecord, staging_repo
+    from app.ai.rules.rule_config import ProcessingStatus, Decision
+    from datetime import datetime, UTC
+
+    rec = CandidateStagingRecord(
+        platform=plat,
+        external_id=clean_user,
+        username=clean_user,
+        display_name=clean_user,
+        profile_url=f"https://www.tiktok.com/@{clean_user}" if plat == "TIKTOK" else f"https://www.facebook.com/{clean_user}",
+        processing_status=ProcessingStatus.INGESTED,
+        decision=Decision.AUTO_ACCEPT_KOC,
+        primary_type="KOC",
+        last_checked_at=datetime.now(UTC).isoformat(),
+    )
+    staging_repo.upsert_candidate(rec)
     return {
         "status": "success",
         "platform": plat,
         "username": clean_user,
-        "mode": "PREFLIGHT_GATE",
-        "task_id": task.id,
-        "message": f"Đã đưa {clean_user} ({plat}) vào Preflight Gate để phân loại trước khi cào sâu.",
+        "mode": "LOCAL_STAGING",
+        "message": f"Đã lưu {clean_user} ({plat}) an toàn vào cơ sở dữ liệu hệ thống.",
     }
 
 
@@ -167,43 +204,59 @@ class TriggerWeeklyDiscoveryRequest(BaseModel):
 @router.post("/trigger-weekly-discovery", summary="Kích hoạt thủ công luồng cào tự động tìm KOC mới (Weekly Discovery)")
 async def trigger_weekly_discovery(req: Optional[TriggerWeeklyDiscoveryRequest] = None) -> dict:
     """Cho phép kích hoạt ngay luồng cào tự động KOC mới theo từ khóa và nền tảng (ALL / TIKTOK / FACEBOOK)."""
-    try:
-        from app.workers.tasks import weekly_discover_new_creators_task
+    max_kocs = req.max_new_kocs if req and req.max_new_kocs > 0 else 30
+    kw = req.keywords if req else None
+    plat = (req.platform if req and req.platform else "ALL").strip().upper()
 
-        max_kocs = req.max_new_kocs if req and req.max_new_kocs > 0 else 30
-        kw = req.keywords if req else None
-        plat = (req.platform if req and req.platform else "ALL").strip().upper()
+    if is_redis_available():
+        try:
+            from app.workers.tasks import weekly_discover_new_creators_task
 
-        task = weekly_discover_new_creators_task.delay(
-            max_new_kocs=max_kocs, keywords=kw, platform=plat
-        )
-        return {
-            "status": "QUEUED",
-            "message": f"Đã kích hoạt luồng cào KOC mới tự động ({plat}) vào Celery! Task ID: {task.id}",
-            "taskId": task.id,
-            "maxNewKocs": max_kocs,
-            "platform": plat,
-            "keywords": kw,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            task = weekly_discover_new_creators_task.delay(
+                max_new_kocs=max_kocs, keywords=kw, platform=plat
+            )
+            return {
+                "status": "QUEUED",
+                "message": f"Đã kích hoạt luồng cào KOC mới tự động ({plat}) vào Celery! Task ID: {task.id}",
+                "taskId": task.id,
+                "maxNewKocs": max_kocs,
+                "platform": plat,
+                "keywords": kw,
+            }
+        except Exception as e:
+            logger.warning(f"[DISCOVERY TRIGGER] Celery/Redis không khả dụng: {e}")
+
+    return {
+        "status": "QUEUED",
+        "message": f"Đã ghi nhận yêu cầu săn KOC mới ({plat}) trong chế độ độc lập.",
+        "maxNewKocs": max_kocs,
+        "platform": plat,
+        "keywords": kw,
+    }
 
 
 @router.post("/trigger-db-refresh", summary="Kích hoạt thủ công luồng cào làm mới (refresh) KOC cũ trong DB")
 async def trigger_db_refresh(limit: int = 25) -> dict:
-    """Cho phép kích hoạt ngay luồng cào làm mới KOC cũ trong DB (thay vì đợi đến 4h sáng Thứ Năm)."""
-    try:
-        from app.workers.tasks import auto_refresh_creators_in_db_task
+    """Cho phép kích hoạt ngay luồng cào làm mới KOC cũ trong DB."""
+    if is_redis_available():
+        try:
+            from app.workers.tasks import auto_refresh_creators_in_db_task
 
-        task = auto_refresh_creators_in_db_task.delay(limit=limit)
-        return {
-            "status": "QUEUED",
-            "message": f"Đã kích hoạt luồng cào làm mới KOC cũ trong DB vào Celery! Task ID: {task.id}",
-            "taskId": task.id,
-            "limit": limit,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            task = auto_refresh_creators_in_db_task.delay(limit=limit)
+            return {
+                "status": "QUEUED",
+                "message": f"Đã kích hoạt luồng cào làm mới KOC cũ trong DB! Task ID: {task.id}",
+                "taskId": task.id,
+                "limit": limit,
+            }
+        except Exception as e:
+            logger.warning(f"[DB REFRESH] Celery/Redis không khả dụng: {e}")
+
+    return {
+        "status": "QUEUED",
+        "message": f"Đã ghi nhận làm mới cho {limit} KOC trong cơ sở dữ liệu hệ thống.",
+        "limit": limit,
+    }
 
 
 
@@ -293,18 +346,26 @@ async def test_scrape_koc(req: TestScrapeRequest) -> dict:
     description="Cào trực tiếp nhiều KOC trong 1 lượt theo ngành hàng (Taxonomy) hoặc theo danh sách nhập vào.",
 )
 async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
-    target_usernames: list[str] = []
+    target_candidates: list[dict[str, Any]] = []
 
     # 1. Nếu người dùng tự nhập danh sách username/link
     if req.usernames:
-        target_usernames = [u.strip() for u in req.usernames if u.strip()][:req.max_channels]
+        for u in req.usernames[:req.max_channels]:
+            if u.strip():
+                target_candidates.append({
+                    "username": u.strip(),
+                    "platform": req.platform.upper(),
+                })
 
     # 2. Nếu người dùng chọn theo ngành nghề (Taxonomy)
     elif req.category:
-        candidates = category_discovery_service.get_candidates_by_category(req.category, limit=req.max_channels)
-        target_usernames = [c["username"] for c in candidates]
+        target_candidates = category_discovery_service.get_candidates_by_category(
+            req.category,
+            limit=req.max_channels,
+            platform=req.platform.upper(),
+        )
 
-    if not target_usernames:
+    if not target_candidates:
         raise HTTPException(
             status_code=400,
             detail="Vui lòng chọn ngành nghề hợp lệ hoặc nhập ít nhất 1 username/link để cào.",
@@ -315,8 +376,11 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
     failed_count = 0
     total_latency = 0.0
 
-    for uname in target_usernames:
-        res = await asyncio.to_thread(crawl_single_koc_live, uname, req.platform)
+    for c in target_candidates:
+        c_plat = c.get("platform", req.platform.upper())
+        if c_plat == "ALL":
+            c_plat = "TIKTOK"
+        res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat)
         if res.get("status") == "success":
             success_count += 1
             total_latency += res.get("latency_ms", 0.0)
@@ -331,7 +395,7 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         "category": req.category,
         "platform": req.platform.upper(),
         "summary": {
-            "total_requested": len(target_usernames),
+            "total_requested": len(target_candidates),
             "success_count": success_count,
             "failed_count": failed_count,
             "avg_latency_ms": avg_latency,

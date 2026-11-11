@@ -1,6 +1,16 @@
 import asyncio
+import os
 import sys
 from contextlib import asynccontextmanager
+
+# Tắt thanh tiến trình tqdm của HuggingFace và ép UTF-8 để tránh lỗi vỡ font thanh tiến trình (mojibake)
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
 
 import uvicorn
 from dotenv import load_dotenv
@@ -51,5 +61,9 @@ app.include_router(review_router.router)
 app.include_router(monitor_router.router)
 
 if __name__ == "__main__":
-    # Reload with BKAI embed endpoint
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=False,
+    )

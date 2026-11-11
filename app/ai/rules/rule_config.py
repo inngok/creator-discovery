@@ -59,7 +59,8 @@ COMMERCIAL_SELLER_PHRASES = [
     "ship toàn quốc", "bảng giá sỉ", "official shop", "cửa hàng chính thức",
     "cửa hàng chính hãng", "official store", "shop chính hãng",
     "phân phối chính hãng", "đại lý ủy quyền", "tổng đại lý", "tổng phân phối",
-    "xưởng gia công", "chuyên may", "chuyên sỉ lẻ"
+    "xưởng gia công", "chuyên may", "chuyên sỉ lẻ", "shop", "store",
+    "giỏ hàng", "bấm vào giỏ hàng", "kho buôn", "kho hàng"
 ]
 REGEX_COMMERCIAL_SELLER = build_boundary_regex(COMMERCIAL_SELLER_PHRASES)
 

@@ -65,16 +65,24 @@ class CategoryDiscoveryService:
             self._cache_df["Phân loại Nhà sáng tạo"].astype(str).str.contains(pattern, case=False, na=False)
         ]
 
+        SHOP_KEYWORDS = ["shop", "store", "tongkho", "bansi", "sile", "khohang", "order", "boutique"]
         candidates = []
-        for _, row in sub_df.head(limit).iterrows():
+        for _, row in sub_df.iterrows():
             uname = str(row["ID Chuyên gia"]).strip().removeprefix("@")
+            dname = str(row.get("Biệt danh chuyên gia", uname))
+            check_text = f"{uname} {dname}".lower()
+            # Bỏ qua tài khoản có chữ shop, store, tổng kho...
+            if any(k in check_text for k in SHOP_KEYWORDS):
+                continue
             candidates.append({
                 "username": uname,
-                "display_name": str(row.get("Biệt danh chuyên gia", uname)),
+                "display_name": dname,
                 "category": str(row.get("Phân loại Nhà sáng tạo", norm_code)),
                 "avatar_hint": str(row.get("Ảnh hồ sơ Chuyên gia", "")),
                 "profile_url": f"https://www.tiktok.com/@{uname}",
             })
+            if len(candidates) >= limit:
+                break
 
         return candidates
 

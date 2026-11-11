@@ -97,16 +97,35 @@ class RuleEngine:
         # ------------------------------------------------------------------
         # BƯỚC 2: BR-02 — CREATOR IDENTITY GATE
         # ------------------------------------------------------------------
-        # Phải có dấu hiệu hồ sơ cá nhân / phong cách sáng tạo
-        if not evidence.has_creator_persona and evidence.total_posts == 0:
-            reasons.append("BR02_FAIL_NO_CREATOR_PERSONA")
-            return RuleDecisionResult(
-                decision=Decision.SKIP_INSUFFICIENT,
-                primary_type="UNKNOWN",
-                reason_codes=reasons,
-                matched_signals=evidence.matched_signals,
-                evidence=evidence.raw_metrics,
-            )
+        # Khi cào live hồ sơ chưa có bài post: Đánh giá theo Tier-0 (Ngưỡng followers và nhận diện cá nhân)
+        if evidence.total_posts == 0:
+            if profile.followers >= 200000:
+                reasons.append("TIER0_AUTO_ACCEPT_KOL_FOLLOWERS")
+                return RuleDecisionResult(
+                    decision=Decision.AUTO_ACCEPT_KOL,
+                    primary_type="KOL",
+                    reason_codes=reasons,
+                    matched_signals=evidence.matched_signals + ["TIER0_KOL_MET"],
+                    evidence=evidence.raw_metrics,
+                )
+            elif profile.followers >= 7000:
+                reasons.append("TIER0_AUTO_ACCEPT_KOC_FOLLOWERS")
+                return RuleDecisionResult(
+                    decision=Decision.AUTO_ACCEPT_KOC,
+                    primary_type="KOC",
+                    reason_codes=reasons,
+                    matched_signals=evidence.matched_signals + ["TIER0_KOC_MET"],
+                    evidence=evidence.raw_metrics,
+                )
+            else:
+                reasons.append("TIER0_REJECT_LOW_FOLLOWERS")
+                return RuleDecisionResult(
+                    decision=Decision.AUTO_REJECT,
+                    primary_type="UNKNOWN",
+                    reason_codes=reasons,
+                    matched_signals=evidence.matched_signals,
+                    evidence=evidence.raw_metrics,
+                )
 
         # ------------------------------------------------------------------
         # BƯỚC 3: BR-03 — KOC EVALUATION (Độc lập)

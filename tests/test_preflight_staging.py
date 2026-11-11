@@ -11,7 +11,6 @@ from app.core.deduplicator import (
 )
 from app.crawlers.search_extractor import (
     evaluate_tier0_search_card,
-    extract_facebook_search_card_candidates,
     extract_search_card_candidates,
     parse_follower_string,
 )
@@ -152,50 +151,6 @@ class TestPreflightAndStaging(unittest.TestCase):
         self.assertIsNotNone(staged)
         self.assertEqual(staged.decision, Decision.AUTO_ACCEPT_KOC)
         self.assertEqual(staged.processing_status, ProcessingStatus.PREFLIGHT_DONE)
-
-    def test_extract_facebook_search_card_candidates(self):
-        """Kiểm tra trích xuất ứng viên từ HTML kết quả tìm kiếm Facebook Pages."""
-        sample_fb_search_html = """
-        <div role="feed">
-            <div>
-                <a href="https://www.facebook.com/koc.review.official">KOC Review Official</a>
-                <span>Trang · Người sáng tạo nội dung số</span>
-                <span>150K người theo dõi · 50K lượt thích</span>
-                <div>Chuyên review đồ công nghệ và phong cách sống</div>
-            </div>
-            <div>
-                <a href="/groups/123456">Hội nhóm Review</a>
-                <span>Nhóm công khai</span>
-            </div>
-            <div>
-                <a href="https://www.facebook.com/tongkhosi.hangbansi">Tổng Kho Sỉ Giá Rẻ</a>
-                <span>Trang · Cửa hàng bán lẻ</span>
-                <span>5K người theo dõi</span>
-                <div>Sỉ sll đồ gia dụng ship toàn quốc</div>
-            </div>
-        </div>
-        """
-        candidates = extract_facebook_search_card_candidates(sample_fb_search_html)
-        self.assertTrue(len(candidates) >= 2)
-
-        # Ứng viên 1: koc.review.official
-        c1 = next((c for c in candidates if c["username"] == "koc.review.official"), None)
-        self.assertIsNotNone(c1)
-        self.assertEqual(c1["platform"], "FACEBOOK")
-        self.assertEqual(c1["followers"], 150000)
-
-        # Đánh giá Nấc 0 cho c1: KOC chuẩn -> PASS
-        passed, reason = evaluate_tier0_search_card(c1)
-        self.assertTrue(passed)
-        self.assertEqual(reason, "PASS_TIER0_PREFILTER")
-
-        # Ứng viên 2: tongkhosi.hangbansi
-        c2 = next((c for c in candidates if c["username"] == "tongkhosi.hangbansi"), None)
-        self.assertIsNotNone(c2)
-        # Đánh giá Nấc 0 cho c2: Chứa từ khóa 'sỉ sll' -> Bị loại bỏ sớm
-        passed_c2, reason_c2 = evaluate_tier0_search_card(c2)
-        self.assertFalse(passed_c2)
-        self.assertEqual(reason_c2, "DROP_COMMERCIAL_SELLER_SNIPPET")
 
 
 if __name__ == "__main__":

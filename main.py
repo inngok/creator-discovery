@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routers import ai_router, crawl_router, monitor_router, review_router
+from app.api.routers import ai_router, crawl_router, monitor_router, review_router, quality_router
 
 
 @asynccontextmanager
@@ -59,6 +59,7 @@ app.include_router(crawl_router.router)
 app.include_router(ai_router.router)
 app.include_router(review_router.router)
 app.include_router(monitor_router.router)
+app.include_router(quality_router.router)
 
 if __name__ == "__main__":
     uvicorn.run(

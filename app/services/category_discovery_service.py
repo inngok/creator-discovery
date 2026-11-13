@@ -21,6 +21,18 @@ CATEGORY_TAXONOMY_MAP = {
 }
 
 
+# Legacy label aliases only; managed fields are served by /data/crawl-fields.
+LEGACY_CATEGORY_CODES_BY_LABEL = {
+    'làm đẹp & mỹ phẩm': 'BEAUTY',
+    'công nghệ & điện thoại / pc': 'TECH',
+    'ẩm thực & nhà hàng': 'FOOD',
+    'thời trang & phụ kiện': 'FASHION',
+    'truyền thông & giải trí': 'ENTERTAINMENT',
+    'du lịch & trải nghiệm': 'TRAVEL',
+    'đời sống, sức khỏe & gia đình': 'LIFESTYLE',
+}
+
+
 class CategoryDiscoveryService:
     def __init__(self):
         self._cache_df: pd.DataFrame | None = None
@@ -42,28 +54,33 @@ class CategoryDiscoveryService:
                 self._cache_df = combined.drop_duplicates(subset=["ID Chuyên gia"]).dropna(subset=["ID Chuyên gia"])
                 logger.info(f"[CATEGORY SERVICE] Đã tải danh mục {len(self._cache_df)} KOCs từ hệ thống.")
 
-    def get_supported_categories(self) -> list[dict[str, str]]:
-        return [
-            {"code": "BEAUTY", "label": "Làm đẹp & Mỹ phẩm", "icon": "💄"},
-            {"code": "TECH", "label": "Công nghệ & Điện thoại / PC", "icon": "💻"},
-            {"code": "FOOD", "label": "Ẩm thực & Nhà hàng", "icon": "🍜"},
-            {"code": "FASHION", "label": "Thời trang & Phụ kiện", "icon": "👗"},
-            {"code": "ENTERTAINMENT", "label": "Truyền thông & Giải trí", "icon": "🎬"},
-            {"code": "TRAVEL", "label": "Du lịch & Trải nghiệm", "icon": "✈️"},
-            {"code": "LIFESTYLE", "label": "Đời sống, Sức khỏe & Gia đình", "icon": "🏡"},
-        ]
-
     def get_candidates_by_category(
-        self, category_code: str, limit: int = 5, platform: str = "ALL"
+        self, category_code: str, limit: int = 5, platform: str = "ALL",
+        keywords: list[str] | None = None
     ) -> list[dict[str, Any]]:
         norm_code = category_code.upper().strip()
         plat_upper = (platform or "ALL").upper().strip()
+
+        if plat_upper == "FACEBOOK":
+            from app.crawlers.discovery_crawler import search_new_facebook_candidates
+            search_terms = list(dict.fromkeys(term.strip().lstrip("#").strip()
+                for term in (keywords or [category_code]) if term.strip().lstrip("#").strip()))
+            return search_new_facebook_candidates(
+                keywords=search_terms, max_per_keyword=limit, max_total=limit)
 
         candidates: list[dict[str, Any]] = []
 
         # 1. Lấy dữ liệu thực từ cache hệ thống (Dataset đã tải)
         if self._cache_df is not None and not self._cache_df.empty:
-            matched_tags = CATEGORY_TAXONOMY_MAP.get(norm_code, [norm_code])
+            # Managed category names are search terms; legacy codes remain supported.
+            legacy_code = LEGACY_CATEGORY_CODES_BY_LABEL.get(category_code.strip().casefold(), norm_code)
+            matched_tags = CATEGORY_TAXONOMY_MAP.get(legacy_code)
+            if matched_tags is None:
+                matched_tags = [term.strip() for term in re.split(r"[&,/;]+", category_code)
+                                if term.strip()]
+            matched_tags = list(matched_tags) + [word.strip() for word in (keywords or []) if word.strip()]
+            if not matched_tags:
+                return []
             pattern = "|".join([re.escape(t) for t in matched_tags])
             sub_df = self._cache_df[
                 self._cache_df["Phân loại Nhà sáng tạo"].astype(str).str.contains(pattern, case=False, na=False)
@@ -91,22 +108,6 @@ class CategoryDiscoveryService:
                     break
 
         # 2. Nếu người dùng chỉ định FACEBOOK: Tìm trong Staging DB thực tế
-        if plat_upper == "FACEBOOK":
-            from app.core.candidate_staging import staging_repo
-            fb_records, _ = staging_repo.list_candidates(limit=50)
-            fb_list = [
-                {
-                    "username": r.username,
-                    "display_name": r.display_name or r.username,
-                    "category": norm_code,
-                    "platform": "FACEBOOK",
-                    "profile_url": r.profile_url,
-                }
-                for r in fb_records
-                if r.platform == "FACEBOOK"
-            ]
-            return fb_list[:limit]
-
         return candidates[:limit]
 
 

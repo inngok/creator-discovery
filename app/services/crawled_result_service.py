@@ -10,6 +10,30 @@ RESULTS_FILE_PATH = os.path.join(
 )
 
 
+def get_crawled_facebook_identifiers() -> set[str]:
+    """Snapshot of successfully collected profiles for discovery exclusion."""
+    from app.crawlers.facebook_crawler import clean_facebook_username
+
+    identifiers = set()
+    if not os.path.exists(RESULTS_FILE_PATH):
+        return identifiers
+    with open(RESULTS_FILE_PATH, encoding="utf-8") as source:
+        for line in source:
+            try:
+                creator = json.loads(line).get("creator")
+            except (json.JSONDecodeError, AttributeError):
+                continue
+            if not isinstance(creator, dict) or str(creator.get("platform", "")).upper() != "FACEBOOK":
+                continue
+            for key in ("username", "externalId", "profileUrl"):
+                value = creator.get(key)
+                if value:
+                    identifier = clean_facebook_username(str(value)).lstrip("@").casefold()
+                    if identifier:
+                        identifiers.add(identifier)
+    return identifiers
+
+
 def _normalize_item(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Chuẩn hóa dữ liệu đọc từ JSONL để an toàn khi trả về client."""
     if not isinstance(raw, dict):

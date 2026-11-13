@@ -174,6 +174,44 @@ def extract_facebook_search_card_candidates(html: str) -> list[dict]:
     return candidates
 
 
+def extract_facebook_hashtag_candidates(html: str) -> list[dict]:
+    """Read post authors, excluding commenters and navigation links."""
+    from urllib.parse import urljoin, urlsplit, parse_qs
+
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = []
+    seen = set()
+    for article in soup.select('[role="article"]'):
+        for anchor in article.select('h2 a[href], h3 a[href], h4 a[href]'):
+            parsed = urlsplit(urljoin("https://www.facebook.com/", anchor["href"]))
+            if parsed.hostname not in {"facebook.com", "www.facebook.com", "m.facebook.com"}:
+                continue
+            slug = parsed.path.strip("/")
+            if slug == "profile.php":
+                username = parse_qs(parsed.query).get("id", [""])[0]
+                if not username.isdigit():
+                    continue
+                profile_url = f"https://www.facebook.com/profile.php?id={username}"
+            else:
+                username = slug
+                if (slug.lower() in FACEBOOK_EXCLUDED_SLUGS
+                        or not re.fullmatch(r"[a-zA-Z0-9._-]{3,}", slug)):
+                    continue
+                profile_url = f"https://www.facebook.com/{username}"
+            if username.casefold() in seen:
+                continue
+            seen.add(username.casefold())
+            candidates.append({
+                "username": username,
+                "display_name": anchor.get_text(" ", strip=True) or username,
+                "bio_snippet": "",
+                "followers": 0,
+                "profile_url": profile_url,
+                "platform": "FACEBOOK",
+            })
+    return candidates
+
+
 def evaluate_tier0_search_card(candidate: dict) -> tuple[bool, str]:
     """
     Bộ lọc Nấc 0 (Zero-Cost Pre-Filter):

@@ -8,17 +8,6 @@ class TestLiveCrawlAndMetrics(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
 
-    def test_get_categories(self):
-        res = self.client.get("/api/v1/crawl/categories")
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertIsInstance(data, list)
-        self.assertGreaterEqual(len(data), 5)
-        codes = [item["code"] for item in data]
-        self.assertIn("BEAUTY", codes)
-        self.assertIn("TECH", codes)
-        self.assertIn("FOOD", codes)
-
     def test_get_metrics(self):
         res = self.client.get("/api/v1/monitor/metrics")
         self.assertEqual(res.status_code, 200)
@@ -76,6 +65,20 @@ class TestLiveCrawlAndMetrics(unittest.TestCase):
         self.assertEqual(data["followers"], 150000)
         self.assertEqual(len(data["recent_posts"]), 1)
         self.assertEqual(data["recent_posts"][0]["caption"], "Top 5 son dưỡng môi tốt nhất")
+
+    @patch("app.api.routers.crawl_router.crawl_single_koc_live")
+    @patch("app.api.routers.crawl_router.category_discovery_service.get_candidates_by_category")
+    def test_partial_discovery_preserves_requested_count(self, discover, crawl):
+        discover.return_value = [{"username": "food.creator", "platform": "FACEBOOK"}]
+        crawl.return_value = {"status": "success", "username": "food.creator", "latency_ms": 1}
+        response = self.client.post("/api/v1/crawl/batch-crawl", json={
+            "platform": "FACEBOOK", "category": "FOOD", "max_channels": 3})
+        self.assertEqual(response.status_code, 200)
+        summary = response.json()["summary"]
+        self.assertEqual(summary["total_requested"], 3)
+        self.assertEqual(summary["attempted_count"], 1)
+        self.assertEqual(summary["discovery_shortfall"], 2)
+        self.assertEqual(summary["failed_count"], 0)
 
     @patch("app.services.live_crawl_service.fetch_tiktok_ssr_raw_data")
     def test_batch_crawl_by_category(self, mock_fetch):

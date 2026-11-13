@@ -311,17 +311,10 @@ class TestScrapeRequest(BaseModel):
 
 class BatchCrawlRequest(BaseModel):
     platform: str = Field(default="TIKTOK", description="Nền tảng: TIKTOK, FACEBOOK, INSTAGRAM")
-    category: Optional[str] = Field(default=None, description="Mã ngành hàng: BEAUTY, TECH, FOOD, FASHION, ENTERTAINMENT, TRAVEL, LIFESTYLE")
+    category: Optional[str] = Field(default=None, description="Managed crawl category name or legacy category code")
     usernames: list[str] = Field(default=[], description="Danh sách link hoặc username cụ thể do người dùng nhập")
+    keywords: list[str] = Field(default_factory=list, max_length=30, description="Search keywords configured for this hunt")
     max_channels: int = Field(default=5, ge=1, le=20, description="Số lượng kênh tối đa cào trong 1 lượt")
-
-
-@router.get(
-    "/categories",
-    summary="Lấy danh mục ngành hàng hỗ trợ cho Batch Crawl (Taxonomy)",
-)
-async def get_crawl_categories() -> list[dict]:
-    return category_discovery_service.get_supported_categories()
 
 
 @router.post(
@@ -359,11 +352,20 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
 
     # 2. Nếu người dùng chọn theo ngành nghề (Taxonomy)
     elif req.category:
-        target_candidates = category_discovery_service.get_candidates_by_category(
-            req.category,
-            limit=req.max_channels,
-            platform=req.platform.upper(),
-        )
+        from app.crawlers.discovery_crawler import FacebookDiscoveryError
+        try:
+            target_candidates = await asyncio.to_thread(
+                category_discovery_service.get_candidates_by_category, req.category,
+                keywords=req.keywords,
+                limit=req.max_channels,
+                platform=req.platform.upper(),
+            )
+        except FacebookDiscoveryError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+    if not target_candidates and req.platform.upper() == "FACEBOOK":
+        raise HTTPException(status_code=422,
+            detail="Không tìm được kênh Facebook phù hợp với từ khóa. Facebook có thể yêu cầu đăng nhập; hãy kiểm tra kết nối hoặc thử nhập URL kênh cụ thể.")
 
     if not target_candidates:
         raise HTTPException(
@@ -395,7 +397,11 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         "category": req.category,
         "platform": req.platform.upper(),
         "summary": {
-            "total_requested": len(target_candidates),
+            "total_requested": (req.max_channels if req.category and not req.usernames
+                                else len(target_candidates)),
+            "attempted_count": len(target_candidates),
+            "discovery_shortfall": (max(0, req.max_channels - len(target_candidates))
+                                    if req.category and not req.usernames else 0),
             "success_count": success_count,
             "failed_count": failed_count,
             "avg_latency_ms": avg_latency,

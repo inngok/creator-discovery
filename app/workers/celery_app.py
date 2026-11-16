@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.workers import crawl_pacing  # noqa: F401
+
 redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
 app = Celery(

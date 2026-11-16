@@ -6,7 +6,7 @@ print("Dang khoi dong he thong chay ngam...")
 subprocess.run(["docker", "start", "influencermatch_redis"], capture_output=True)
 
 commands = [
-    ["venv\\Scripts\\uvicorn.exe", "main:app", "--port", "8000"],
+    ["venv\\Scripts\\uvicorn.exe", "main:app", "--port", "8000", "--reload"],
     [
         "venv\\Scripts\\celery.exe",
         "-A",

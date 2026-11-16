@@ -7,7 +7,7 @@ from typing import Any
 
 from app.ai.rules.rule_config import Decision, ProcessingStatus
 from app.ai.rules.rule_engine import RuleEngine
-from app.ai.rules.signal_extractor import ProfileMetadata
+from app.ai.rules.signal_extractor import ProfileMetadata, PostPreview
 from app.clients.java_client import java_client
 from app.core.candidate_staging import CandidateStagingRecord, staging_repo
 from app.core.logger import setup_logger
@@ -262,7 +262,9 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
         followers=followers,
         is_verified=is_verified,
     )
-    decision_result = RuleEngine.evaluate(profile_meta, [])
+    previews = [PostPreview(post_id=p.get("platformPostId", ""), caption=p.get("caption", ""),
+                            views=p.get("views", 0), likes=p.get("likes", 0)) for p in recent_posts]
+    decision_result = RuleEngine.evaluate(profile_meta, previews)
 
     # 4. Lưu Staging DB
     staging_record = CandidateStagingRecord(
@@ -271,7 +273,7 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
         username=unique_id,
         display_name=display_name,
         profile_url=profile_url,
-        processing_status=ProcessingStatus.INGESTED,
+        processing_status=ProcessingStatus.PREFLIGHT_DONE,
         decision=decision_result.decision,
         primary_type=decision_result.primary_type,
         reason_codes=decision_result.reason_codes,
@@ -309,7 +311,9 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
     append_to_crawled_results(crawled_payload)
 
     # 5.1 Gửi dữ liệu đã chuẩn hóa sang Java Backend (PostgreSQL) nếu là KOL/KOC
-    if decision_result.primary_type in ["KOL", "KOC"]:
+    database_synced = False
+    sync_error = None
+    if decision_result.decision in [Decision.AUTO_ACCEPT_KOC, Decision.AUTO_ACCEPT_KOL, Decision.MANAGER_APPROVED]:
         try:
             creator_obj = CreatorInfo(
                 platform=Platform.TIKTOK if platform_upper == "TIKTOK" else Platform(platform_upper),
@@ -339,17 +343,30 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
                 )
                 for p in recent_posts
             ]
-            ai_obj = AIEnrichment(
-                creatorType=decision_result.primary_type,
-                decision=decision_result.decision.value,
-                matchedSignals=decision_result.matched_signals,
-            )
+            from app.ai.analyzer import process_ai_enrichment
+
+            ai_obj = process_ai_enrichment(creator_obj, posts_objs)
+            if ai_obj is None:
+                raise ValueError("AI enrichment returned no result; skip ingest")
+            if ai_obj.creatorType in {"BRAND", "USER"}:
+                decision_result = decision_result.model_copy(update={
+                    "decision": Decision.AUTO_REJECT,
+                    "primary_type": ai_obj.creatorType,
+                    "reason_codes": ["AI_ENTITY_NOT_INDEPENDENT_CREATOR"],
+                })
+                staging_repo.update_status_and_decision(
+                    platform=platform_upper, username=unique_id, status=ProcessingStatus.PREFLIGHT_DONE,
+                    decision=Decision.AUTO_REJECT, primary_type=ai_obj.creatorType,
+                    reason_codes=decision_result.reason_codes)
+                raise ValueError("AI classification does not qualify for creator ingest")
+            ai_obj.creatorType = decision_result.primary_type
             ingest_payload = IngestPayload(
                 creator=creator_obj,
                 recentPosts=posts_objs,
                 aiEnrichment=ai_obj,
                 source="LIVE_DIRECT_CRAWLER",
             )
+            append_to_crawled_results(ingest_payload.model_dump(mode="json"))
             java_payload = JavaMapper.from_ingest_payload(ingest_payload)
 
             with open("data/java_payloads_debug.jsonl", "a", encoding="utf-8") as f:
@@ -357,8 +374,14 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
 
             sent_ok = java_client.send_creator_data(java_payload)
             if sent_ok:
+                database_synced = True
+                staging_repo.update_status_and_decision(
+                    platform=platform_upper, username=unique_id, status=ProcessingStatus.INGESTED)
                 logger.info(f"[LIVE CRAWL] Đã gửi thành công @{unique_id} sang Java Backend Database!")
+            else:
+                sync_error = "JAVA_INGEST_FAILED"
         except Exception as ingest_err:
+            sync_error = type(ingest_err).__name__
             logger.warning(f"[LIVE CRAWL] Không thể gửi payload sang Java Backend: {ingest_err}")
 
     # 6. Ghi nhận metric thành công
@@ -390,6 +413,9 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
         "is_verified": is_verified,
         "decision": decision_result.decision.value,
         "primary_type": decision_result.primary_type,
+        "reason_codes": decision_result.reason_codes,
+        "database_synced": database_synced,
+        "sync_error": sync_error,
         "latency_ms": round(latency_ms, 2),
         "recent_posts": recent_posts,
         "collected_at": datetime.now(UTC).isoformat(),

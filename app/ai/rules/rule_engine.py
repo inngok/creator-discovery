@@ -84,6 +84,17 @@ class RuleEngine:
         # ------------------------------------------------------------------
         # Khi cào live hồ sơ chưa có bài post: Đánh giá theo Tier-0 (Ngưỡng followers và nhận diện cá nhân)
         if evidence.total_posts == 0:
+            # A store-like handle is ambiguous without posts, never auto-accept it.
+            # It is not sufficient evidence to classify an account as a merchant.
+            handle = profile.username.strip().lstrip("@").lower()
+            if "shop" in handle or "store" in handle:
+                return RuleDecisionResult(
+                    decision=Decision.SKIP_INSUFFICIENT,
+                    primary_type="UNKNOWN",
+                    reason_codes=["TIER0_STORE_HANDLE_REQUIRES_POST_EVIDENCE"],
+                    matched_signals=evidence.matched_signals,
+                    evidence=evidence.raw_metrics,
+                )
             if profile.followers < 7000:
                 reasons.append("TIER0_REJECT_LOW_FOLLOWERS")
                 return RuleDecisionResult(

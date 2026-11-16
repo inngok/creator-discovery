@@ -65,7 +65,7 @@ def preflight_candidate_task(
                 f"[CELERY PREFLIGHT GATE] Đã kích hoạt Deep Crawl cho @{clean_user} (Decision: {decision.value})"
             )
         elif decision == Decision.RETRY_PREFLIGHT:
-            raise self.retry(countdown=15)
+            raise self.retry(countdown=180)
         else:
             logger.info(
                 f"[CELERY PREFLIGHT GATE] KHÔNG Deep Crawl @{clean_user} do Decision: {decision.value} "
@@ -81,7 +81,7 @@ def preflight_candidate_task(
         }
     except Exception as e:
         logger.error(f"[CELERY PREFLIGHT ERROR] @{clean_user}: {e}")
-        raise self.retry(exc=e, countdown=15)
+        raise self.retry(exc=e, countdown=180)
 
 
 # ==============================================================================
@@ -167,6 +167,7 @@ def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Opt
                 recent_posts=result.recentPosts,
                 category=getattr(result.aiEnrichment, "category", "") or "",
                 niche=getattr(result.aiEnrichment, "niche", "") or "",
+                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
             )
             if result.aiEnrichment:
                 result.aiEnrichment.creatorType = smart_type
@@ -204,10 +205,10 @@ def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Opt
             return result.model_dump(mode="json")
         else:
             logger.warning(f"[WORKER] FAILED: Could not crawl @{clean_user}. Retrying...")
-            raise self.retry(countdown=10)
+            raise self.retry(countdown=180)
     except Exception as e:
         logger.error(f"[WORKER] ERROR processing @{clean_user}: {e}")
-        raise self.retry(exc=e, countdown=10)
+        raise self.retry(exc=e, countdown=180)
 
 
 @app.task(bind=True, max_retries=3, queue="deep_crawl_queue")
@@ -288,6 +289,7 @@ def process_facebook_profile(self, username: str, is_refresh: bool = False) -> O
                 recent_posts=result.recentPosts,
                 category=getattr(result.aiEnrichment, "category", "") or "",
                 niche=getattr(result.aiEnrichment, "niche", "") or "",
+                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
             )
             if result.aiEnrichment:
                 result.aiEnrichment.creatorType = smart_type
@@ -406,6 +408,7 @@ def process_instagram_profile(self, username: str, is_refresh: bool = False) -> 
                 recent_posts=result.recentPosts,
                 category=getattr(result.aiEnrichment, "category", "") or "",
                 niche=getattr(result.aiEnrichment, "niche", "") or "",
+                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
             )
             if result.aiEnrichment:
                 result.aiEnrichment.creatorType = smart_type

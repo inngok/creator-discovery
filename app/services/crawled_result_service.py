@@ -10,6 +10,27 @@ RESULTS_FILE_PATH = os.path.join(
 )
 
 
+def get_crawled_tiktok_identifiers() -> set[str]:
+    """Exclude previously collected handles and stable author IDs from new hunts."""
+    identifiers = set()
+    if not os.path.exists(RESULTS_FILE_PATH):
+        return identifiers
+    with open(RESULTS_FILE_PATH, encoding="utf-8") as source:
+        for line in source:
+            try:
+                row = json.loads(line)
+                creator = row.get("creator") if isinstance(row, dict) else None
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(creator, dict) or str(creator.get("platform", "")).upper() != "TIKTOK":
+                continue
+            for field in ("username", "externalId"):
+                value = creator.get(field)
+                if value:
+                    identifiers.add(str(value).strip().lstrip("@").casefold())
+    return identifiers
+
+
 def get_crawled_facebook_identifiers() -> set[str]:
     """Snapshot of successfully collected profiles for discovery exclusion."""
     from app.crawlers.facebook_crawler import clean_facebook_username

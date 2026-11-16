@@ -31,8 +31,8 @@ class JavaMapper:
             if result.aiEnrichment
             else "UNKNOWN"
         )
-        niche = result.aiEnrichment.niche if result.aiEnrichment else "General"
-        category = result.aiEnrichment.category if result.aiEnrichment else "Lifestyle"
+        niche = (result.aiEnrichment.niche if result.aiEnrichment else None) or "UNKNOWN"
+        category = (result.aiEnrichment.category if result.aiEnrichment else None) or "UNKNOWN"
         content_summary = (
             result.aiEnrichment.contentSummary
             if result.aiEnrichment and getattr(result.aiEnrichment, "contentSummary", None)
@@ -78,7 +78,7 @@ class JavaMapper:
         return {
             "platform": result.creator.platform.value,
             "externalId": result.creator.externalId,
-            "userName": result.creator.username,
+            "userName": result.creator.username.strip().lstrip("@").strip(),
             "displayName": result.creator.displayName,
             "avatarUrl": result.creator.avatarUrl,
             "creatorType": creator_type,

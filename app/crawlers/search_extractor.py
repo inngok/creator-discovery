@@ -63,43 +63,27 @@ def extract_search_card_candidates(html: str) -> list[dict]:
     candidates = []
     seen_users = set()
 
-    # Tìm các link profile
-    user_links = soup.find_all("a", href=True)
-    for a in user_links:
-        href = a.get("href", "")
-        if not href.startswith("/@"):
+    # Only profile links inside actual search-result cards, never navigation/sidebar links.
+    cards = soup.select('[data-e2e="search-user-container"], [data-e2e="search-user-item"], [data-e2e="search-user-card"]')
+    for card in cards:
+        link = card.select_one('a[href*="/@"]')
+        if not link:
             continue
-
-        username = href.split("?")[0].replace("/@", "").strip()
-        if not username or username in seen_users:
+        match = re.search(r"/@([A-Za-z0-9._]+)(?:[/?#]|$)", link.get('href', ''))
+        if not match:
             continue
-        seen_users.add(username)
-
-        # Lấy container cha chứa toàn bộ card
-        parent_card = a.find_parent("div")
-        card_text = parent_card.get_text(separator=" ") if parent_card else ""
-
-        # Tìm display name và follower string
-        display_name = a.get_text(strip=True) or username
-        bio_snippet = ""
-        followers = 0
-
-        # Thử tìm các đoạn text mô tả và số follower lân cận
-        if parent_card:
-            text_lines = [line.strip() for line in parent_card.stripped_strings if line.strip()]
-            for line in text_lines:
-                if any(kw in line.lower() for kw in ["follower", "theo dõi", "fl"]):
-                    followers = parse_follower_string(line)
-                elif line != display_name and line != f"@{username}" and len(line) > 10:
-                    bio_snippet = line
-
+        username = match.group(1)
+        if username.casefold() in seen_users:
+            continue
+        seen_users.add(username.casefold())
+        text = card.get_text(' ', strip=True)
+        follower_node = card.select_one('[data-e2e="search-user-follower"]')
+        followers = parse_follower_string(follower_node.get_text(' ', strip=True)) if follower_node else 0
         candidates.append({
-            "username": username,
-            "display_name": display_name,
-            "bio_snippet": bio_snippet,
-            "followers": followers,
-            "profile_url": f"https://www.tiktok.com/@{username}",
-            "platform": "TIKTOK",
+            'username': username, 'display_name': link.get_text(strip=True) or username,
+            'bio_snippet': text, 'followers': followers,
+            'profile_url': f'https://www.tiktok.com/@{username}', 'platform': 'TIKTOK',
+            'topic_evidence_text': text,
         })
 
     return candidates

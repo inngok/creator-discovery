@@ -59,15 +59,15 @@ def _init_instagram_playwright_context(p) -> tuple[BrowserContext, str]:
 
     state_path = os.path.join("data", "playwright_ig_state.json")
     context_args = {
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "viewport": {"width": 1280, "height": 800},
+        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
+        "viewport": {"width": 390, "height": 844},
+        "is_mobile": True,
+        "has_touch": True,
     }
     if os.path.exists(state_path):
         context_args["storage_state"] = state_path
 
     context = browser.new_context(**context_args)
-    # Chặn toàn bộ chuyển hướng sang trang login
-    context.route("**/accounts/login/**", lambda route: route.abort())
 
     cookie_path = os.path.join("data", "ig_cookies.json")
     if os.path.exists(cookie_path) and not os.path.exists(state_path):
@@ -254,8 +254,14 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         title_text = og_title.get("content") if og_title else page.title()
         avatar_url = og_image.get("content") if og_image else None
 
-        # Kiểm tra nếu bị Instagram chặn bắt đăng nhập
-        if (
+        # Parse Followers trước khi kiểm tra login wall
+        followers = 0
+        f_match = re.search(r"([\d.,]+[KMBkmb]?)\s+Followers", desc_text, re.IGNORECASE)
+        if f_match:
+            followers = parse_instagram_number(f_match.group(1))
+
+        # Kiểm tra nếu bị Instagram chặn bắt đăng nhập hoàn toàn (không có cả meta OG followers)
+        if followers == 0 and (
             "login" in page.url.lower()
             or (title_text.strip().lower() == "instagram" and "log in" in desc_text.lower())
         ):
@@ -263,12 +269,6 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
             raise ValueError(
                 f"Profile @{username} yêu cầu đăng nhập. Vui lòng thêm cookie vào data/ig_cookies.json để cào tài khoản này."
             )
-
-        # Parse Followers
-        followers = 0
-        f_match = re.search(r"([\d.,]+[KMBkmb]?)\s+Followers", desc_text, re.IGNORECASE)
-        if f_match:
-            followers = parse_instagram_number(f_match.group(1))
 
         # Parse Display Name
         display_name = username

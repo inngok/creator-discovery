@@ -302,6 +302,30 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
             page_text = soup.get_text(separator=" ")
             followers = extract_facebook_followers(raw_bio, page_text)
 
+            # Fallback sang m.facebook.com nếu trang desktop bị chặn hoặc không bóc được followers
+            if followers == 0 or "login" in page.url.lower():
+                logger.info(f"[Facebook Crawler] Fallback mở mobile URL: https://m.facebook.com/{clean_slug}")
+                m_url = f"https://m.facebook.com/profile.php?id={clean_slug}" if clean_slug.isdigit() else f"https://m.facebook.com/{clean_slug}"
+                try:
+                    page.goto(m_url, wait_until="domcontentloaded", timeout=20000)
+                    page.wait_for_timeout(2000)
+                    m_soup = BeautifulSoup(page.content(), "html.parser")
+                    m_og_desc = m_soup.find("meta", property="og:description") or m_soup.find("meta", attrs={"name": "description"})
+                    if m_og_desc and m_og_desc.get("content"):
+                        m_bio = m_og_desc.get("content")
+                        m_followers = extract_facebook_followers(m_bio, m_soup.get_text(separator=" "))
+                        if m_followers > 0:
+                            followers = m_followers
+                            raw_bio = m_bio
+                    m_og_title = m_soup.find("meta", property="og:title")
+                    if m_og_title and m_og_title.get("content") and display_name == clean_slug:
+                        display_name = m_og_title.get("content")
+                    m_og_img = m_soup.find("meta", property="og:image")
+                    if m_og_img and m_og_img.get("content") and not avatar_url:
+                        avatar_url = m_og_img.get("content")
+                except Exception as m_err:
+                    logger.warning(f"[Facebook Crawler] Lỗi khi fallback sang mobile: {m_err}")
+
             # Loại bỏ tiền tố thống kê tự sinh của Facebook
             clean_bio = re.sub(
                 r"^.*?[\d\.,]+[KMBTr]?\s*(?:người theo dõi|followers|lượt thích|likes).*?(?:đang nói về điều này|talking about this)[\.\s·-]*",

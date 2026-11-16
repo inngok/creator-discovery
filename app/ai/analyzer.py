@@ -16,6 +16,7 @@ from app.ai.config import (
     SEMANTIC_THRESHOLD,
 )
 from app.ai.schemas import PredictionResult
+from app.ai.grounded_enrichment import build_content_summary, has_label_evidence, resolve_grounded_fallback_labels
 from app.ai.services.embedding_service import embedding_service
 from app.core.models import AIEnrichment, CreatorInfo, Post
 
@@ -340,6 +341,8 @@ def get_llm_enrichment(prompt: str) -> dict | None:
                 model=fallback_models[0],
                 messages=[{"role": "user", "content": prompt}],
                 fallbacks=fallback_models[1:] if len(fallback_models) > 1 else [],
+                timeout=30,
+                num_retries=0,
             )
 
             if response and response.choices:
@@ -417,13 +420,14 @@ def process_ai_enrichment(
 
     # Khoi tao bien mac dinh
     tag_str = ", ".join(tags) if tags else "nhiều chủ đề đa dạng"
-    summary = f"Creator tập trung vào ngách {niche.upper()}, thường xuyên đăng nội dung liên quan tới: {tag_str}."
+    summary = build_content_summary(bio, [post.caption for post in recent_posts if post.caption])
     suggested_topic = None
     semantic_tags = []
 
     # 3. Gemini Fallback & Auto-Labeling (JSON Prompt)
     should_call_gemini = False
-    needs_fallback = False
+    # Product-group labels are generated for every channel, not only ML failures.
+    needs_fallback = True
 
     followers = getattr(creator_info, "followers", 0)
 
@@ -439,13 +443,18 @@ def process_ai_enrichment(
             True  # Nho Gemini kiem tra lai xem co phai KOL/KOC bi ML doan nham khong
         )
 
+    needs_fallback = True
+    should_call_gemini = True
     if text_combined and should_call_gemini:
         try:
             prompt = f"""
             Dựa trên Bio: '{bio}' và các Caption: '{captions}', và đang sở hữu {creator_info.followers} followers. 
+            Phân loại kênh vào 1-3 nhóm sản phẩm thực sự xuất hiện trong nội dung.
+            Mỗi nhóm phải có bằng chứng riêng, xếp nhóm chính trước; không điền đủ 3 nhóm nếu không có bằng chứng.
+            Không lấy nghề nghiệp, chủ đề đời sống hay từ khóa quảng cáo chung làm nhóm sản phẩm.
             Hãy phân tích và trả về ĐÚNG định dạng JSON sau (không kèm markdown ```json hay text khác):
             {{
-                "summary": "Viết 1-2 câu TÓM TẮT nội dung kênh (Tuyệt đối KHÔNG copy lại thông tin liên hệ, SĐT, Email, hay giá booking từ Bio). Nếu không đủ dữ liệu, ghi: 'Kênh chia sẻ nội dung đời sống và giải trí.'",
+                "contentEvidence": ["Trích nguyên văn nội dung có thật trong Caption/Bio; không thêm chủ đề hay trải nghiệm không có trong nguồn"],
                 "tags": ["3-5 từ khóa xu hướng, liền mạch (ví dụ: ẩm thực đồng quê, review xe)"],
                 "semanticTags": ["3-5 thẻ ngữ nghĩa sâu xa hơn (ví dụ: gia đình, chữa lành, công nghệ cốt lõi)"],
                 "topic": "Một chủ đề gợi ý (ví dụ: Ẩm thực nông thôn)",
@@ -454,7 +463,8 @@ def process_ai_enrichment(
             if needs_fallback:
                 prompt += """,
                 "categoryFallback": "Một trong 10 Category (BEAUTY, TECH, FOOD, FASHION, LIFESTYLE, AUTOMOTIVE, ENTERTAINMENT, EDUCATION, SPORTS, GAMING)",
-                "nicheFallback": "Một ngách phù hợp bằng tiếng Anh viết hoa (ví dụ: VLOG, COMEDY, SKINCARE, v.v...)",
+                "nicheLabels": [{"label": "Chọn đúng tên nhóm: Mỹ phẩm, Trang phục, Sức khỏe và Làm đẹp, Gia dụng, Thực phẩm, Điện tử, Mẹ và Bé", "evidence": ["Trích nguyên văn Caption/Bio chứng minh riêng nhóm này"]}],
+                "labelEvidence": ["Trích nguyên văn câu trong Caption/Bio chứng minh ngành/ngách; thiếu bằng chứng trả mảng rỗng"],
                 "creatorTypeFallback": "Chọn 1 trong 4 loại: KOL (người nổi tiếng, chuyên gia, nghệ sĩ, có sức ảnh hưởng, thường >100k followers), KOC (tập trung review sản phẩm, unbox, gắn link affiliate, chốt đơn, mọi mức follower), BRAND (tài khoản chính thức công ty/thương hiệu), USER (người bình thường chia sẻ đời sống cá nhân, không có yếu tố thương mại)"
                 """
             prompt += "\n}"
@@ -463,16 +473,7 @@ def process_ai_enrichment(
 
             if ai_data:
                 is_selling = ai_data.get("isSelling", False)
-                summary = ai_data.get("summary", summary)
-
-                # CHẶN AI COPY BIO: Kiểm tra xem summary có chứa SĐT, email hay từ khóa rác không
-                if (
-                    summary == bio
-                    or "for work" in summary.lower()
-                    or "@" in summary
-                    or re.search(r"\d{8,}", summary)
-                ):
-                    summary = f"Creator tập trung vào ngách {niche.upper()}, thường xuyên đăng tải nội dung về: {', '.join(tags) if tags else 'đa dạng chủ đề'}."
+                # summary remains an excerpt of the actual public source, not generated prose.
 
                 if ai_data.get("tags"):
                     tags = ai_data["tags"]
@@ -486,12 +487,12 @@ def process_ai_enrichment(
                     fb_niche = ai_data.get("nicheFallback")
                     fb_ctype = ai_data.get("creatorTypeFallback")
 
-                    if fb_cat and fb_cat in CATEGORY_PROTOTYPES:
-                        category = fb_cat
-                        if fb_niche:
-                            niche = fb_niche
+                    category, niche = resolve_grounded_fallback_labels(
+                        category, niche, ai_data, [bio, *[p.caption for p in recent_posts if p.caption]]
+                    )
 
-                    if fb_ctype in ["KOL", "KOC", "BRAND", "USER"]:
+                    if (creator_type != "BRAND" and fb_ctype in ["KOL", "KOC", "BRAND", "USER"]
+                            and has_label_evidence(ai_data, [bio, *[p.caption for p in recent_posts if p.caption]])):
                         creator_type = fb_ctype
 
                     _save_auto_label_metrics(

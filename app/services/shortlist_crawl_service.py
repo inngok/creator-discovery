@@ -78,9 +78,14 @@ def crawl_and_sync_creator_sync(platform: str, username: str, creator_id: Option
             recent_posts=result.recentPosts,
             category=getattr(result.aiEnrichment, "category", "") or "",
             niche=getattr(result.aiEnrichment, "niche", "") or "",
+            classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
         )
         if result.aiEnrichment:
             result.aiEnrichment.creatorType = smart_type
+
+        if smart_type not in {"KOC", "KOL"}:
+            return {"mode": "DIRECT", "status": "REJECTED", "creator_type": smart_type,
+                    "message": "Public evidence does not establish eligible creator classification"}
 
         # Ánh xạ sang Java Payload và gửi sang Backend
         java_payload = JavaMapper.from_ingest_payload(result)

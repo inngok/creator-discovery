@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.workers import crawl_pacing  # noqa: F401
+
 redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
 app = Celery(
@@ -12,6 +14,12 @@ app = Celery(
 )
 
 app.conf.update(
+    broker_connection_retry_on_startup=False,
+    broker_connection_max_retries=1,
+    broker_transport_options={
+        "socket_timeout": 1.5,
+        "socket_connect_timeout": 1.5,
+    },
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",

@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import unicodedata
 from typing import List, Optional
 
 from bs4 import BeautifulSoup
@@ -18,19 +19,27 @@ def parse_stat_number(val_str: str) -> int:
     """Chuyển đổi chuỗi số có định dạng K, M, Tr, B hoặc dấu chấm/phẩy sang số nguyên (Đa ngôn ngữ VN/EN)."""
     if not val_str:
         return 0
-    val_str = val_str.upper().strip()
-    multiplier = 1
-    if any(k in val_str for k in ["B", "TỶ", "TY"]):
-        multiplier = 1_000_000_000
-    elif any(k in val_str for k in ["M", "TR", "TRIỆU", "TRIEU"]):
-        multiplier = 1_000_000
-    elif any(k in val_str for k in ["K", "NGHÌN", "NGHIN"]):
-        multiplier = 1_000
-
-    clean_str = re.sub(r"[^0-9\.]", "", val_str.replace(",", "."))
+    normalized = "".join(c for c in unicodedata.normalize("NFKD", val_str.casefold())
+                         if not unicodedata.combining(c))
+    match = re.search(r"([0-9]+(?:[.,][0-9]+)*)\s*(?:(ty|trieu|tr|nghin|ngan|[kmb])\b)?", normalized)
+    if not match:
+        return 0
+    number, unit = match.groups()
+    multipliers = {"ty": 10**9, "b": 10**9, "trieu": 10**6, "tr": 10**6,
+                   "m": 10**6, "nghin": 1000, "ngan": 1000, "k": 1000}
+    if unit:
+        if "." in number and "," in number:
+            decimal = max(number.rfind("."), number.rfind(","))
+            number = re.sub(r"[.,]", "", number[:decimal]) + "." + number[decimal+1:]
+        else:
+            number = number.replace(",", ".")
+    elif re.fullmatch(r"[0-9]{1,3}(?:[.,][0-9]{3})+", number):
+        number = re.sub(r"[.,]", "", number)
+    else:
+        number = number.replace(",", ".")
     try:
-        return int(float(clean_str) * multiplier)
-    except Exception:
+        return int(float(number) * multipliers.get(unit, 1))
+    except ValueError:
         return 0
 
 
@@ -124,21 +133,17 @@ def dismiss_facebook_dialogs(page: Page) -> None:
 
 def extract_facebook_followers(raw_bio: str, page_text: str) -> int:
     """Trích xuất Followers từ bio hoặc text trang với regex đa ngôn ngữ (EN/VN)."""
+    number = r"([0-9]+(?:[.,][0-9]+)*(?:\s*(?:k|m|b|tr|triệu|nghìn|ngàn|tỷ))?)"
     patterns = [
-        r"([\d\.,]+[KMBTr]?)\s*(?:người theo dõi|người thích|lượt thích|followers?|likes?)",
-        r"(?:followed by|có)\s*([\d\.,]+[KMBTr]?)\s*(?:people|người)?",
-        r"([\d\.,]+[KMBTr]?)\s+Followers",
+        number + r"\s*(?:người theo dõi|lượt theo dõi|followers?)\b",
+        r"(?:followed by)\s*" + number + r"(?:\s*people)?",
     ]
-    for pat in patterns:
-        m = re.search(pat, raw_bio, re.IGNORECASE)
-        if m:
-            return parse_stat_number(m.group(1))
-
-    for pat in patterns:
-        m = re.search(pat, page_text, re.IGNORECASE)
-        if m:
-            return parse_stat_number(m.group(1))
-
+    for text in (raw_bio, page_text):
+        for pattern in patterns:
+            match = re.search(pattern, text or "", re.IGNORECASE)
+            if match:
+                return parse_stat_number(match.group(1))
+    # Page likes and post reactions are not follower counts.
     return 0
 
 
@@ -296,6 +301,30 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
             # 2. Bóc tách số lượng Followers đa ngôn ngữ
             page_text = soup.get_text(separator=" ")
             followers = extract_facebook_followers(raw_bio, page_text)
+
+            # Fallback sang m.facebook.com nếu trang desktop bị chặn hoặc không bóc được followers
+            if followers == 0 or "login" in page.url.lower():
+                logger.info(f"[Facebook Crawler] Fallback mở mobile URL: https://m.facebook.com/{clean_slug}")
+                m_url = f"https://m.facebook.com/profile.php?id={clean_slug}" if clean_slug.isdigit() else f"https://m.facebook.com/{clean_slug}"
+                try:
+                    page.goto(m_url, wait_until="domcontentloaded", timeout=20000)
+                    page.wait_for_timeout(2000)
+                    m_soup = BeautifulSoup(page.content(), "html.parser")
+                    m_og_desc = m_soup.find("meta", property="og:description") or m_soup.find("meta", attrs={"name": "description"})
+                    if m_og_desc and m_og_desc.get("content"):
+                        m_bio = m_og_desc.get("content")
+                        m_followers = extract_facebook_followers(m_bio, m_soup.get_text(separator=" "))
+                        if m_followers > 0:
+                            followers = m_followers
+                            raw_bio = m_bio
+                    m_og_title = m_soup.find("meta", property="og:title")
+                    if m_og_title and m_og_title.get("content") and display_name == clean_slug:
+                        display_name = m_og_title.get("content")
+                    m_og_img = m_soup.find("meta", property="og:image")
+                    if m_og_img and m_og_img.get("content") and not avatar_url:
+                        avatar_url = m_og_img.get("content")
+                except Exception as m_err:
+                    logger.warning(f"[Facebook Crawler] Lỗi khi fallback sang mobile: {m_err}")
 
             # Loại bỏ tiền tố thống kê tự sinh của Facebook
             clean_bio = re.sub(

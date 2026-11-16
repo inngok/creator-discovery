@@ -1,7 +1,6 @@
 import os
 import re
 from typing import Any
-import pandas as pd
 from app.core.logger import setup_logger
 
 logger = setup_logger("category_discovery_service")
@@ -21,63 +20,48 @@ CATEGORY_TAXONOMY_MAP = {
 }
 
 
+# Legacy label aliases only; managed fields are served by /data/crawl-fields.
+LEGACY_CATEGORY_CODES_BY_LABEL = {
+    'làm đẹp & mỹ phẩm': 'BEAUTY',
+    'công nghệ & điện thoại / pc': 'TECH',
+    'ẩm thực & nhà hàng': 'FOOD',
+    'thời trang & phụ kiện': 'FASHION',
+    'truyền thông & giải trí': 'ENTERTAINMENT',
+    'du lịch & trải nghiệm': 'TRAVEL',
+    'đời sống, sức khỏe & gia đình': 'LIFESTYLE',
+}
+
+
 class CategoryDiscoveryService:
-    def __init__(self):
-        self._cache_df: pd.DataFrame | None = None
-        self._load_directory()
-
-    def _load_directory(self):
-        excel_files = [f for f in os.listdir(DATA_DIR) if f.endswith(".xlsx") and "TÌm_kiếm" in f]
-        dfs = []
-        for ef in excel_files:
-            try:
-                full_path = os.path.join(DATA_DIR, ef)
-                dfs.append(pd.read_excel(full_path))
-            except Exception as e:
-                logger.warning(f"Không thể đọc file {ef}: {e}")
-
-        if dfs:
-            combined = pd.concat(dfs, ignore_index=True)
-            if "ID Chuyên gia" in combined.columns:
-                self._cache_df = combined.drop_duplicates(subset=["ID Chuyên gia"]).dropna(subset=["ID Chuyên gia"])
-                logger.info(f"[CATEGORY SERVICE] Đã tải danh mục {len(self._cache_df)} KOCs từ hệ thống.")
-
-    def get_supported_categories(self) -> list[dict[str, str]]:
-        return [
-            {"code": "BEAUTY", "label": "Làm đẹp & Mỹ phẩm", "icon": "💄"},
-            {"code": "TECH", "label": "Công nghệ & Điện thoại / PC", "icon": "💻"},
-            {"code": "FOOD", "label": "Ẩm thực & Nhà hàng", "icon": "🍜"},
-            {"code": "FASHION", "label": "Thời trang & Phụ kiện", "icon": "👗"},
-            {"code": "ENTERTAINMENT", "label": "Truyền thông & Giải trí", "icon": "🎬"},
-            {"code": "TRAVEL", "label": "Du lịch & Trải nghiệm", "icon": "✈️"},
-            {"code": "LIFESTYLE", "label": "Đời sống, Sức khỏe & Gia đình", "icon": "🏡"},
-        ]
-
-    def get_candidates_by_category(self, category_code: str, limit: int = 5) -> list[dict[str, Any]]:
-        norm_code = category_code.upper().strip()
-        matched_tags = CATEGORY_TAXONOMY_MAP.get(norm_code, [norm_code])
-
-        if self._cache_df is None or self._cache_df.empty:
+    def get_candidates_by_category(
+        self, category_code: str, limit: int = 5, platform: str = "ALL",
+        keywords: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        from app.crawlers.discovery_crawler import (
+            search_new_facebook_candidates, search_new_tiktok_candidates,
+        )
+        target = (platform or "ALL").upper().strip()
+        if target not in {"TIKTOK", "FACEBOOK", "ALL", "BOTH"}:
+            raise ValueError("Unsupported discovery platform")
+        if limit <= 0:
             return []
-
-        pattern = "|".join([re.escape(t) for t in matched_tags])
-        sub_df = self._cache_df[
-            self._cache_df["Phân loại Nhà sáng tạo"].astype(str).str.contains(pattern, case=False, na=False)
-        ]
-
+        code = LEGACY_CATEGORY_CODES_BY_LABEL.get(category_code.strip().casefold(),
+                                                 category_code.upper().strip())
+        terms = keywords or CATEGORY_TAXONOMY_MAP.get(code, [category_code])
+        terms = list(dict.fromkeys(t.strip().lstrip("#").strip() for t in terms
+                                   if isinstance(t, str) and t.strip().lstrip("#").strip()))
+        if not terms:
+            return []
         candidates = []
-        for _, row in sub_df.head(limit).iterrows():
-            uname = str(row["ID Chuyên gia"]).strip().removeprefix("@")
-            candidates.append({
-                "username": uname,
-                "display_name": str(row.get("Biệt danh chuyên gia", uname)),
-                "category": str(row.get("Phân loại Nhà sáng tạo", norm_code)),
-                "avatar_hint": str(row.get("Ảnh hồ sơ Chuyên gia", "")),
-                "profile_url": f"https://www.tiktok.com/@{uname}",
-            })
-
-        return candidates
+        if target in {"TIKTOK", "ALL", "BOTH"}:
+            candidates.extend(search_new_tiktok_candidates(
+                keywords=terms, max_per_keyword=limit, max_total=limit,
+                requested_category=category_code))
+        remaining = limit - len(candidates)
+        if remaining > 0 and target in {"FACEBOOK", "ALL", "BOTH"}:
+            candidates.extend(search_new_facebook_candidates(
+                keywords=terms, max_per_keyword=remaining, max_total=remaining))
+        return candidates[:limit]
 
 
 category_discovery_service = CategoryDiscoveryService()
-

@@ -69,6 +69,7 @@ def run_smart_reclassification():
             recent_posts=recent_posts,
             category=cat,
             niche=niche,
+            classified_type=old_type,
         )
 
         if smart_type == "KOL":

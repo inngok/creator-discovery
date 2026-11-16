@@ -22,6 +22,7 @@ class CreatorInfo(BaseModel):
     avatarUrl: str | None = None
     followers: int = Field(..., description="NOT NULL")
     bio: str | None = None
+    isVerified: bool = False
 
     # Optional commercial contact info (extra fields not in example but useful)
     publicEmail: str | None = None
@@ -37,6 +38,7 @@ class Post(BaseModel):
     likes: int | None = 0
     comments: int | None = 0
     shares: int | None = 0
+    coverUrl: str | None = ""
     postedAt: str | None = None
 
 

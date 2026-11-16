@@ -51,15 +51,26 @@ def build_boundary_regex(phrases: list[str]) -> re.Pattern:
     return re.compile(pattern, re.IGNORECASE | re.UNICODE)
 
 
-# 1. Từ khóa/cụm từ nhận diện Brand, Cửa hàng sỉ lẻ, Tổng kho
+# 1. Từ khóa/cụm từ nhận diện Brand, Cửa hàng sỉ lẻ, Tổng kho, Merchant bán hàng
 COMMERCIAL_SELLER_PHRASES = [
+    # Bán sỉ, kho buôn, xưởng
     "chuyên sỉ", "giá xưởng", "sỉ lẻ", "tổng kho", "tuyển ctv",
     "tuyển cộng tác viên", "tuyển đại lý", "nhập hàng", "xưởng may",
     "kho sỉ", "buôn sỉ", "bỏ sỉ", "đổ sỉ", "order taobao",
     "ship toàn quốc", "bảng giá sỉ", "official shop", "cửa hàng chính thức",
     "cửa hàng chính hãng", "official store", "shop chính hãng",
     "phân phối chính hãng", "đại lý ủy quyền", "tổng đại lý", "tổng phân phối",
-    "xưởng gia công", "chuyên may", "chuyên sỉ lẻ"
+    "xưởng gia công", "chuyên may", "chuyên sỉ lẻ", "shop", "store", "boutique",
+    "giỏ hàng", "bấm vào giỏ hàng", "kho buôn", "kho hàng", "sẵn kho", "hàng có sẵn",
+    # Dấu hiệu bán hàng trực tiếp / merchant bán lẻ qua bio
+    "đơn hàng", "từng đơn hàng", "chốt đơn", "lên đơn", "đặt hàng", "mua hàng",
+    "bán hàng", "hoàn tiền", "1 đổi 1", "lỗi 1 đổi 1", "lỗi 1, đổi 1", "đổi trả",
+    "bao đổi trả", "không ưng hoàn tiền", "cam kết hoàn tiền", "hoàn tiền ạ",
+    "ship cod", "đồng kiểm", "cho xem hàng", "kiểm tra hàng", "freeship",
+    "xả kho", "thanh lý lỗ", "xả hàng", "thanh lý", "mua 1 tặng 1",
+    "inbox báo giá", "check inbox", "báo giá", "tư vấn đặt hàng", "bán lẻ", "giá sỉ",
+    "ủng hộ em", "ủng hộ shop", "ủng hộ qua từng đơn hàng", "hotline đặt hàng",
+    "hotline", "zalo mua hàng", "liên hệ đặt hàng", "bán buôn",
 ]
 REGEX_COMMERCIAL_SELLER = build_boundary_regex(COMMERCIAL_SELLER_PHRASES)
 

@@ -37,15 +37,6 @@ class PreflightService:
             can_enqueue, reason = should_enqueue_preflight(platform_upper, clean_user)
             if not can_enqueue:
                 logger.info(f"[PREFLIGHT SERVICE] Bỏ qua @{clean_user} do: {reason}")
-                existing = staging_repo.get_candidate(platform_upper, clean_user)
-                if existing:
-                    return RuleDecisionResult(
-                        decision=existing.decision,
-                        primary_type=existing.primary_type,
-                        reason_codes=existing.reason_codes,
-                        matched_signals=existing.matched_signals,
-                        evidence=existing.evidence_summary,
-                    )
                 return RuleDecisionResult(
                     decision=Decision.SKIP_INSUFFICIENT,
                     primary_type="UNKNOWN",
@@ -117,6 +108,18 @@ class PreflightService:
             else:
                 # 5. Đưa qua High-Precision Rule Engine
                 decision_result = RuleEngine.evaluate(profile, posts)
+
+            if not is_refresh and decision_result.decision in {
+                Decision.SKIP_INSUFFICIENT, Decision.NEEDS_MANAGER_REVIEW
+            }:
+                from app.ai.analyzer import get_llm_enrichment
+                from app.services.ai_candidate_review import review_candidate
+                try:
+                    decision_result = review_candidate(
+                        profile, posts, decision_result, get_llm_enrichment
+                    )
+                except Exception as exc:
+                    logger.warning("AI second opinion failed: %s", type(exc).__name__)
 
             # 6. Lưu kết quả vào Staging Repository
             candidate_record = CandidateStagingRecord(

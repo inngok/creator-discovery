@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app.ai.rules.post_validator import validate_post_crawl
@@ -25,6 +27,13 @@ class TestPostValidationAndSafeIngestion(unittest.TestCase):
     """
 
     def setUp(self):
+        staging_tmp = tempfile.TemporaryDirectory(prefix="creator-post-validation-")
+        self.addCleanup(staging_tmp.cleanup)
+        staging_patch = patch("app.core.candidate_staging.SQLITE_STAGING_PATH",
+                              str(Path(staging_tmp.name) / "staging.db"))
+        staging_patch.start()
+        self.addCleanup(staging_patch.stop)
+        staging_repo._init_sqlite()
         self.emb_patcher = patch(
             "app.mappers.java_mapper.embedding_service.get_search_embedding",
             return_value=[0.05] * 768,
@@ -33,6 +42,19 @@ class TestPostValidationAndSafeIngestion(unittest.TestCase):
 
     def tearDown(self):
         self.emb_patcher.stop()
+
+    def test_brand_from_enrichment_cannot_be_promoted_and_sent_to_java(self):
+        username = "brand_fixture_not_creator"
+        staging_repo.upsert_candidate(CandidateStagingRecord(
+            platform="TIKTOK", username=username,
+            processing_status=ProcessingStatus.DEEP_CRAWL_QUEUED,
+            decision=Decision.AUTO_ACCEPT_KOC, primary_type="KOC"))
+        payload = self._create_mock_ingest_payload(username, creator_type="BRAND")
+        with patch("app.workers.tasks._crawl_tiktok_profile_sync", return_value=payload), \
+             patch("app.workers.tasks.process_ai_enrichment", return_value=payload.aiEnrichment), \
+             patch("app.workers.tasks.java_client.send_creator_data") as send:
+            process_tiktok_profile.run(username)
+        send.assert_not_called()
 
     def _create_mock_ingest_payload(
         self,

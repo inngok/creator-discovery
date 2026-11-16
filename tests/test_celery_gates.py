@@ -239,12 +239,13 @@ class TestCeleryGatesAndPipeline(unittest.TestCase):
     def test_api_enqueue_tiktok_routes_to_preflight_by_default(
         self, mock_preflight_delay, mock_deep_delay
     ):
-        """Kiểm tra API /tiktok/enqueue mặc định đi qua Preflight Gate."""
+        """Kiểm tra API /enqueue mặc định đi qua Preflight Gate."""
         import asyncio
-        from app.api.routers.crawl_router import enqueue_tiktok
+        from app.api.routers.crawl_router import EnqueueCandidateRequest, enqueue_candidate
 
         mock_preflight_delay.return_value = MagicMock(id="task-mock-preflight-1")
-        res = asyncio.run(enqueue_tiktok("creator_user_1", force_deep_crawl=False))
+        req = EnqueueCandidateRequest(platform="TIKTOK", username="creator_user_1", force_deep_crawl=False)
+        res = asyncio.run(enqueue_candidate(req))
         self.assertEqual(res["status"], "success")
         self.assertEqual(res["mode"], "PREFLIGHT_GATE")
         mock_preflight_delay.assert_called_once_with("TIKTOK", "creator_user_1")
@@ -255,12 +256,13 @@ class TestCeleryGatesAndPipeline(unittest.TestCase):
     def test_api_enqueue_tiktok_force_deep_crawl(
         self, mock_preflight_delay, mock_deep_delay
     ):
-        """Kiểm tra API /tiktok/enqueue với force_deep_crawl=True kích hoạt Deep Crawl."""
+        """Kiểm tra API /enqueue với force_deep_crawl=True kích hoạt Deep Crawl."""
         import asyncio
-        from app.api.routers.crawl_router import enqueue_tiktok
+        from app.api.routers.crawl_router import EnqueueCandidateRequest, enqueue_candidate
 
         mock_deep_delay.return_value = MagicMock(id="task-mock-deep-1")
-        res = asyncio.run(enqueue_tiktok("creator_user_2", force_deep_crawl=True))
+        req = EnqueueCandidateRequest(platform="TIKTOK", username="creator_user_2", force_deep_crawl=True)
+        res = asyncio.run(enqueue_candidate(req))
         self.assertEqual(res["status"], "success")
         self.assertEqual(res["mode"], "FORCE_DEEP_CRAWL")
         mock_deep_delay.assert_called_once_with("creator_user_2", is_refresh=True)

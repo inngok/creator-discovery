@@ -106,7 +106,7 @@ class SignalExtractor:
         bio_clean = (profile.bio or "").lower().strip()
         display_name_clean = (profile.display_name or "").lower().strip()
         username_clean = (profile.username or "").lower().strip()
-        profile_text = f"{display_name_clean} {bio_clean}"
+        profile_text = f"{username_clean} {display_name_clean} {bio_clean}"
 
         # ----------------------------------------------------
         # 1. BÓC TÁCH ENTITY SIGNALS (Thương mại / Báo đài / Spam)

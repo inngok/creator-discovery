@@ -65,7 +65,7 @@ def preflight_candidate_task(
                 f"[CELERY PREFLIGHT GATE] Đã kích hoạt Deep Crawl cho @{clean_user} (Decision: {decision.value})"
             )
         elif decision == Decision.RETRY_PREFLIGHT:
-            raise self.retry(countdown=15)
+            raise self.retry(countdown=180)
         else:
             logger.info(
                 f"[CELERY PREFLIGHT GATE] KHÔNG Deep Crawl @{clean_user} do Decision: {decision.value} "
@@ -81,7 +81,7 @@ def preflight_candidate_task(
         }
     except Exception as e:
         logger.error(f"[CELERY PREFLIGHT ERROR] @{clean_user}: {e}")
-        raise self.retry(exc=e, countdown=15)
+        raise self.retry(exc=e, countdown=180)
 
 
 # ==============================================================================
@@ -167,6 +167,7 @@ def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Opt
                 recent_posts=result.recentPosts,
                 category=getattr(result.aiEnrichment, "category", "") or "",
                 niche=getattr(result.aiEnrichment, "niche", "") or "",
+                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
             )
             if result.aiEnrichment:
                 result.aiEnrichment.creatorType = smart_type
@@ -204,10 +205,10 @@ def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Opt
             return result.model_dump(mode="json")
         else:
             logger.warning(f"[WORKER] FAILED: Could not crawl @{clean_user}. Retrying...")
-            raise self.retry(countdown=10)
+            raise self.retry(countdown=180)
     except Exception as e:
         logger.error(f"[WORKER] ERROR processing @{clean_user}: {e}")
-        raise self.retry(exc=e, countdown=10)
+        raise self.retry(exc=e, countdown=180)
 
 
 @app.task(bind=True, max_retries=3, queue="deep_crawl_queue")
@@ -288,6 +289,7 @@ def process_facebook_profile(self, username: str, is_refresh: bool = False) -> O
                 recent_posts=result.recentPosts,
                 category=getattr(result.aiEnrichment, "category", "") or "",
                 niche=getattr(result.aiEnrichment, "niche", "") or "",
+                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
             )
             if result.aiEnrichment:
                 result.aiEnrichment.creatorType = smart_type
@@ -406,6 +408,7 @@ def process_instagram_profile(self, username: str, is_refresh: bool = False) -> 
                 recent_posts=result.recentPosts,
                 category=getattr(result.aiEnrichment, "category", "") or "",
                 niche=getattr(result.aiEnrichment, "niche", "") or "",
+                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
             )
             if result.aiEnrichment:
                 result.aiEnrichment.creatorType = smart_type
@@ -456,3 +459,225 @@ def run_retrain_pipeline(self) -> None:
         logger.info("[WORKER] Chạy thành công AI Retrain Pipeline.")
     except Exception as e:
         logger.error(f"[WORKER] Lỗi khi chạy AI Retrain Pipeline: {e}")
+
+
+# ==============================================================================
+# PHA 3: TỰ ĐỘNG CÀO KOC MỚI ĐỊNH KỲ HÀNG TUẦN (WEEKLY DISCOVERY OF NEW KOCS)
+# ==============================================================================
+DISCOVERY_KEYWORDS_VI = [
+    "review mỹ phẩm",
+    "review đồ ăn",
+    "review công nghệ",
+    "review thời trang",
+    "review gia dụng",
+    "review du lịch",
+]
+
+
+@app.task(bind=True, queue="default")
+def weekly_discover_new_creators_task(
+    self,
+    max_new_kocs: int = 30,
+    keywords: Optional[list[str]] = None,
+    platform: str = "ALL",
+) -> dict:
+    """
+    Task chạy định kỳ hàng tuần trên Celery Beat hoặc do Manager kích hoạt:
+    - Quét tìm kiếm ứng viên trên các chuyên mục ngành nghề phổ biến hoặc từ khóa tùy chỉnh.
+    - Hỗ trợ đa nền tảng: TIKTOK, FACEBOOK hoặc ALL (quét cả 2).
+    - Tự động lấy từ khóa TARGET đang active trong DB nếu không truyền trực tiếp.
+    - LOẠI BỎ 100% KOC CŨ ĐÃ CÓ TRONG HỆ THỐNG (Chỉ chọn KOC mới toanh).
+    - Đưa KOC mới vào hàng đợi Preflight để lọc tự động (Rule Engine BR-01 -> BR-06)
+      và Deep Crawl nếu đạt chuẩn.
+    """
+    target_platform = (platform or "ALL").strip().upper()
+    logger.info(
+        f"[WEEKLY DISCOVERY] Bắt đầu luồng cào tự động tìm KOC MỚI ({target_platform}) (Tối đa {max_new_kocs} KOC)..."
+    )
+    try:
+        from app.crawlers.discovery_crawler import (
+            search_new_facebook_candidates,
+            search_new_tiktok_candidates,
+        )
+
+        search_keywords = [k.strip() for k in keywords if k and k.strip()] if keywords else []
+        if not search_keywords:
+            try:
+                import psycopg2
+
+                db_host = os.environ.get("DB_HOST", "221.121.3.226")
+                db_user = os.environ.get("DB_USER", "influencermatch_user")
+                db_pass = os.environ.get("DB_PASSWORD", "12345")
+                db_name = os.environ.get("DB_NAME", "influencermatch_dev")
+
+                conn = psycopg2.connect(
+                    host=db_host,
+                    user=db_user,
+                    password=db_pass,
+                    dbname=db_name,
+                    connect_timeout=5,
+                )
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT keyword FROM discovery_keyword WHERE is_active = true AND keyword_type = 'TARGET'"
+                )
+                rows = cur.fetchall()
+                conn.close()
+                db_keywords = [r[0].strip() for r in rows if r[0] and r[0].strip()]
+                if db_keywords:
+                    search_keywords = db_keywords
+                    logger.info(
+                        f"[WEEKLY DISCOVERY] Đã nạp {len(search_keywords)} từ khóa TARGET từ PostgreSQL: {search_keywords}"
+                    )
+            except Exception as db_err:
+                logger.debug(f"[WEEKLY DISCOVERY] Không lấy được từ khóa từ DB ({db_err}), sử dụng mặc định.")
+
+        if not search_keywords:
+            search_keywords = DISCOVERY_KEYWORDS_VI
+            logger.info(f"[WEEKLY DISCOVERY] Sử dụng bộ từ khóa mặc định: {search_keywords}")
+
+        candidates: list[dict] = []
+
+        # 1. Quét TikTok nếu yêu cầu TIKTOK hoặc ALL/BOTH
+        if target_platform in ["ALL", "BOTH", "TIKTOK"]:
+            tiktok_candidates = search_new_tiktok_candidates(
+                keywords=search_keywords,
+                max_per_keyword=8,
+                max_total=max_new_kocs * 2,  # Quét rộng để trừ hao các KOC cũ
+            )
+            candidates.extend(tiktok_candidates)
+
+        # 2. Quét Facebook nếu yêu cầu FACEBOOK hoặc ALL/BOTH
+        if target_platform in ["ALL", "BOTH", "FACEBOOK"]:
+            fb_candidates = search_new_facebook_candidates(
+                keywords=search_keywords,
+                max_per_keyword=8,
+                max_total=max_new_kocs * 2,
+            )
+            candidates.extend(fb_candidates)
+
+        new_enqueued = 0
+        skipped_old = 0
+
+        for cand in candidates:
+            if new_enqueued >= max_new_kocs:
+                break
+
+            cand_platform = cand.get("platform", "TIKTOK").upper()
+            username = cand.get("username", "").strip()
+            clean_user = username.removeprefix("@").strip().lower()
+
+            if not clean_user:
+                continue
+
+            # 🚨 KIỂM TRA CHỐNG CÀO KOC CŨ:
+            # Nếu username đã có trong staging database -> Bỏ qua tuyệt đối!
+            existing = staging_repo.get_candidate(cand_platform, clean_user)
+            if existing is not None:
+                skipped_old += 1
+                logger.debug(f"[WEEKLY DISCOVERY] Bỏ qua KOC CŨ: {cand_platform} @{clean_user} (đã có trong DB)")
+                continue
+
+            # Đây là KOC HOÀN TOÀN MỚI -> Đưa vào hàng đợi Preflight Task
+            preflight_candidate_task.delay(cand_platform, clean_user)
+            new_enqueued += 1
+            logger.info(
+                f"[WEEKLY DISCOVERY ENQUEUE] Đã phát hiện và đưa KOC MỚI ({cand_platform}) @{clean_user} "
+                f"({cand.get('followers', 0)} fl) vào Preflight Queue ({new_enqueued}/{max_new_kocs})"
+            )
+
+        summary = {
+            "status": "COMPLETED",
+            "total_candidates_scanned": len(candidates),
+            "new_kocs_enqueued": new_enqueued,
+            "old_kocs_skipped": skipped_old,
+        }
+        logger.info(f"[WEEKLY DISCOVERY] Hoàn tất luồng tự động hàng tuần: {summary}")
+        return summary
+    except Exception as e:
+        logger.error(f"[WEEKLY DISCOVERY] Lỗi khi cào KOC mới tự động hàng tuần: {e}")
+        return {"status": "FAILED", "error": str(e)}
+
+
+# ==============================================================================
+# PHA 4: TỰ ĐỘNG CÀO LẠI (REFRESH) CÁC KOC CŨ ĐÃ CÓ TRONG DATABASE
+# ==============================================================================
+@app.task(bind=True, queue="default")
+def auto_refresh_creators_in_db_task(self, limit: int = 25) -> dict:
+    """
+    Task chạy định kỳ tự động:
+    - Lấy danh sách các Creator cũ ĐÃ CÓ TRONG DATABASE có ngày cập nhật cũ nhất.
+    - Kích hoạt luồng cào làm mới (is_refresh=True) để lấy số follower, view, like mới
+      và tính lại dataConfidence (hồi phục độ tươi freshness về 1.00).
+    - Cập nhật trực tiếp (Upsert) vào hồ sơ KOC hiện có, KHÔNG tạo bản ghi mới.
+    """
+    logger.info(f"[AUTO REFRESH DB] Bắt đầu quét cào lại các KOC cũ trong DB (Giới hạn: {limit} KOC)...")
+    try:
+        targets: list[dict] = []
+
+        # 1. Thử lấy từ PostgreSQL Database nếu có cấu hình kết nối
+        try:
+            import psycopg2
+
+            db_host = os.environ.get("DB_HOST", "221.121.3.226")
+            db_user = os.environ.get("DB_USER", "influencermatch_user")
+            db_pass = os.environ.get("DB_PASSWORD", "12345")
+            db_name = os.environ.get("DB_NAME", "influencermatch_dev")
+
+            conn = psycopg2.connect(
+                host=db_host,
+                user=db_user,
+                password=db_pass,
+                dbname=db_name,
+                connect_timeout=5,
+            )
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT c.platform, c.user_name
+                FROM creator c
+                LEFT JOIN public_creator_metric m ON c.id = m.creator_id
+                ORDER BY m.observed_at ASC NULLS FIRST
+                LIMIT %s;
+            """, (limit,))
+            rows = cur.fetchall()
+            for r in rows:
+                if r[1]:
+                    targets.append({"platform": str(r[0]).upper(), "username": str(r[1]).strip()})
+            conn.close()
+            logger.info(f"[AUTO REFRESH DB] Đã lấy {len(targets)} KOC cũ từ PostgreSQL Deploy.")
+        except Exception as pg_err:
+            logger.debug(f"[AUTO REFRESH DB] Không kết nối được PostgreSQL ({pg_err}), chuyển sang Staging SQLite.")
+
+        # 2. Nếu không lấy được từ PostgreSQL, lấy từ Staging SQLite
+        if not targets:
+            stale_records = staging_repo.get_stale_ingested_candidates(limit=limit)
+            for rec in stale_records:
+                targets.append({"platform": rec.platform.upper(), "username": rec.username.strip()})
+            logger.info(f"[AUTO REFRESH DB] Đã lấy {len(targets)} KOC cũ từ Staging SQLite.")
+
+        if not targets:
+            logger.info("[AUTO REFRESH DB] Không tìm thấy KOC cũ nào cần làm mới.")
+            return {"status": "SUCCESS", "message": "Không có KOC nào cần cào lại.", "enqueued_count": 0}
+
+        enqueued_count = 0
+        for item in targets:
+            plat = item["platform"]
+            uname = item["username"].removeprefix("@").strip()
+            if not uname:
+                continue
+
+            # Kích hoạt cào làm mới với cờ is_refresh=True
+            preflight_candidate_task.delay(plat, uname, is_refresh=True)
+            enqueued_count += 1
+            logger.info(f"[AUTO REFRESH DB ENQUEUE] Đã xếp hàng cào lại ({enqueued_count}/{len(targets)}): {plat} @{uname}")
+
+        return {
+            "status": "COMPLETED",
+            "enqueued_count": enqueued_count,
+            "total_stale_found": len(targets),
+        }
+    except Exception as e:
+        logger.error(f"[AUTO REFRESH DB] Lỗi khi cào lại KOC cũ trong DB: {e}")
+        return {"status": "FAILED", "error": str(e)}
+
+

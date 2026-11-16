@@ -1,6 +1,7 @@
 import re
 from app.ai.services.embedding_service import embedding_service
 from app.core.confidence import compute_data_confidence
+from app.core.fee_benchmark import get_estimated_fee
 from app.core.models import IngestPayload
 
 
@@ -30,8 +31,8 @@ class JavaMapper:
             if result.aiEnrichment
             else "UNKNOWN"
         )
-        niche = result.aiEnrichment.niche if result.aiEnrichment else "General"
-        category = result.aiEnrichment.category if result.aiEnrichment else "Lifestyle"
+        niche = (result.aiEnrichment.niche if result.aiEnrichment else None) or "UNKNOWN"
+        category = (result.aiEnrichment.category if result.aiEnrichment else None) or "UNKNOWN"
         content_summary = (
             result.aiEnrichment.contentSummary
             if result.aiEnrichment and getattr(result.aiEnrichment, "contentSummary", None)
@@ -71,16 +72,22 @@ class JavaMapper:
             er=result.engagement_rate or 0.0,
         )
 
+        # 4. Tra cứu giá ước tính tham khảo theo followers (Declarative 0 if-else)
+        est_fee_min, est_fee_max = get_estimated_fee(result.creator.followers)
+
         return {
             "platform": result.creator.platform.value,
             "externalId": result.creator.externalId,
-            "userName": result.creator.username,
+            "userName": result.creator.username.strip().lstrip("@").strip(),
             "displayName": result.creator.displayName,
             "avatarUrl": result.creator.avatarUrl,
             "creatorType": creator_type,
             "location": "Vietnam",
             "profileUrl": result.creator.profileUrl,
             "followers": result.creator.followers,
+            "estimatedFeeMin": est_fee_min,
+            "estimatedFeeMax": est_fee_max,
+            "actualFee": None,
             "avgViews": result.avg_views,
             "avgLikes": result.avg_likes,
             "avgComments": result.avg_comments,

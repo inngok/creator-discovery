@@ -1,4 +1,8 @@
+import os
 import threading
+
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 import numpy as np
 from sentence_transformers import SentenceTransformer

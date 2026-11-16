@@ -4,13 +4,17 @@ import os
 import re
 import sys
 import time
+from datetime import UTC, datetime
 from typing import List, Optional
 
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import BrowserContext, Page, sync_playwright
 from playwright_stealth import Stealth
 
+from app.core.logger import setup_logger
 from app.core.models import AIEnrichment, CreatorInfo, IngestPayload, Platform, Post
+
+logger = setup_logger("instagram_crawler")
 
 # Configure standard encoding for Windows console
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
@@ -41,6 +45,174 @@ def parse_instagram_number(val: str) -> int:
         return 0
 
 
+def _init_instagram_playwright_context(p) -> tuple[BrowserContext, str]:
+    """Khởi tạo context Playwright cho Instagram với Cookie nạp tự động."""
+    browser = p.chromium.launch(
+        headless=True,
+        args=[
+            "--disable-gpu",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+        ],
+    )
+
+    state_path = os.path.join("data", "playwright_ig_state.json")
+    context_args = {
+        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
+        "viewport": {"width": 390, "height": 844},
+        "is_mobile": True,
+        "has_touch": True,
+    }
+    if os.path.exists(state_path):
+        context_args["storage_state"] = state_path
+
+    context = browser.new_context(**context_args)
+
+    cookie_path = os.path.join("data", "ig_cookies.json")
+    if os.path.exists(cookie_path) and not os.path.exists(state_path):
+        try:
+            with open(cookie_path, "r", encoding="utf-8") as f:
+                raw_cookies = json.load(f)
+                if isinstance(raw_cookies, dict) and "cookies" in raw_cookies:
+                    raw_cookies = raw_cookies["cookies"]
+                valid_cookies = []
+                for c in raw_cookies:
+                    if not isinstance(c, dict) or "name" not in c or "value" not in c:
+                        continue
+                    cookie_obj = {
+                        "name": str(c["name"]),
+                        "value": str(c["value"]),
+                        "domain": str(c.get("domain", ".instagram.com")),
+                        "path": str(c.get("path", "/")),
+                    }
+                    same_site = str(c.get("sameSite", "")).capitalize()
+                    if same_site in ["Strict", "Lax", "None"]:
+                        cookie_obj["sameSite"] = same_site
+                    valid_cookies.append(cookie_obj)
+
+                if valid_cookies:
+                    context.add_cookies(valid_cookies)
+                    logger.info(f"[Instagram] Đã nạp thành công {len(valid_cookies)} cookies từ {cookie_path}")
+        except Exception as e:
+            logger.warning(f"[Instagram] Không thể nạp cookie từ {cookie_path}: {e}")
+
+    return context, state_path
+
+
+def extract_instagram_posts_from_soup(soup: BeautifulSoup, max_posts: int = 5) -> tuple[List[Post], str]:
+    """
+    Trích xuất toàn bộ bài đăng kèm Likes, Comments, Views, Timestamp từ embedded JSON scripts
+    của Instagram mà KHÔNG CẦN gọi page.goto() từng post.
+    """
+    recent_posts: List[Post] = []
+    seen_codes = set()
+    user_pk = ""
+
+    for s in soup.find_all("script"):
+        stext = s.string or ""
+        if not stext:
+            continue
+
+        if "pk" in stext and not user_pk:
+            pk_m = re.search(r'"pk":"(\d+)"', stext)
+            if pk_m:
+                user_pk = pk_m.group(1)
+
+        # Tìm các block media trong Polaris / GraphQL / timeline connection
+        if any(k in stext for k in ["polaris_ordered_timeline_connection", "XIGPolaris", "user_timeline_graphql_connection", "edge_owner_to_timeline_media"]):
+            code_matches = list(re.finditer(r'"code":"([A-Za-z0-9_-]+)"', stext))
+            if not code_matches:
+                code_matches = list(re.finditer(r'"shortcode":"([A-Za-z0-9_-]+)"', stext))
+
+            for m in code_matches:
+                p_code = m.group(1)
+                if p_code in seen_codes:
+                    continue
+                seen_codes.add(p_code)
+
+                # Lấy đoạn text JSON xung quanh bài viết này (±1000 ký tự) để bóc tương tác
+                start_idx = max(0, m.start() - 200)
+                end_idx = min(len(stext), m.end() + 1200)
+                chunk = stext[start_idx:end_idx]
+
+                # Caption
+                cap_m = re.search(r'"caption":\{"text":"((?:[^"\\]|\\.)*)"\}', chunk)
+                clean_cap = ""
+                if cap_m:
+                    try:
+                        clean_cap = json.loads(f'"{cap_m.group(1)}"')
+                    except Exception:
+                        clean_cap = cap_m.group(1).replace("\\n", "\n")
+
+                # Likes
+                like_m = re.search(r'"(?:like_count|edge_media_preview_like|edge_liked_by)"\s*:\s*(?:\{"count"\s*:\s*)?(\d+)', chunk)
+                likes = int(like_m.group(1)) if like_m else 0
+
+                # Comments
+                comm_m = re.search(r'"(?:comment_count|edge_media_to_comment)"\s*:\s*(?:\{"count"\s*:\s*)?(\d+)', chunk)
+                comments = int(comm_m.group(1)) if comm_m else 0
+
+                # Views
+                view_m = re.search(r'"(?:play_count|video_view_count)"\s*:\s*(\d+)', chunk)
+                views = int(view_m.group(1)) if view_m else 0
+
+                # Timestamp
+                time_m = re.search(r'"(?:taken_at|taken_at_timestamp)"\s*:\s*(\d+)', chunk)
+                posted_at = None
+                if time_m:
+                    try:
+                        dt = datetime.fromtimestamp(int(time_m.group(1)), tz=UTC)
+                        posted_at = dt.isoformat()
+                    except Exception:
+                        pass
+
+                recent_posts.append(
+                    Post(
+                        platformPostId=p_code,
+                        postUrl=f"https://www.instagram.com/p/{p_code}/",
+                        caption=clean_cap,
+                        views=views,
+                        likes=likes,
+                        comments=comments,
+                        shares=0,
+                        postedAt=posted_at,
+                    )
+                )
+                if len(recent_posts) >= max_posts:
+                    break
+
+        if len(recent_posts) >= max_posts:
+            break
+
+    # Fallback lấy post URLs và Alt text từ DOM nếu script parse không ra
+    if not recent_posts:
+        for a in soup.find_all("a", href=True):
+            if len(recent_posts) >= max_posts:
+                break
+            m = re.search(r"/(?:p|reel)/([A-Za-z0-9_-]+)/", a["href"])
+            if m:
+                code = m.group(1)
+                if code not in seen_codes:
+                    seen_codes.add(code)
+                    img = a.find("img")
+                    cap = img.get("alt", "") if img else ""
+                    recent_posts.append(
+                        Post(
+                            platformPostId=code,
+                            postUrl=f"https://www.instagram.com/p/{code}/",
+                            caption=cap,
+                            views=0,
+                            likes=0,
+                            comments=0,
+                            shares=0,
+                            postedAt=None,
+                        )
+                    )
+
+    return recent_posts, user_pk
+
+
 def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
     username = username.strip()
     if "instagram.com" in username:
@@ -52,57 +224,20 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         username = username[1:]
 
     url = f"https://www.instagram.com/{username}/"
-    print(f"[Instagram Crawler] Bat dau cao profile: @{username} ({url})")
+    logger.info(f"[Instagram Crawler] Bắt đầu cào profile: @{username} ({url})")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-gpu",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
-
-        state_path = os.path.join("data", "playwright_ig_state.json")
-        context_args = {
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "viewport": {"width": 1280, "height": 800},
-        }
-        if os.path.exists(state_path):
-            context_args["storage_state"] = state_path
-
-        context = browser.new_context(**context_args)
-        # Chặn toàn bộ chuyển hướng (redirect) sang trang login
-        context.route("**/accounts/login/**", lambda route: route.abort())
-
-        # Nap cookie json neu co
-        cookie_path = os.path.join("data", "ig_cookies.json")
-        if os.path.exists(cookie_path) and not os.path.exists(state_path):
-            try:
-                with open(cookie_path, "r", encoding="utf-8") as f:
-                    cookies = json.load(f)
-                    valid_cookies = []
-                    for c in cookies:
-                        if "sameSite" in c and c["sameSite"] not in ["Strict", "Lax", "None"]:
-                            del c["sameSite"]
-                        valid_cookies.append(c)
-                    context.add_cookies(valid_cookies)
-                print(f"[Instagram] Da nap cookie tu {cookie_path}")
-            except Exception as e:
-                print(f"[Instagram] Khong the nap cookie: {e}")
-
+        context, state_path = _init_instagram_playwright_context(p)
         page = context.new_page()
         stealth = Stealth()
         stealth.apply_stealth_sync(page)
 
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            time.sleep(1)
+            page.wait_for_timeout(1500)
         except Exception as e:
-            browser.close()
-            raise ValueError(f"Khong the truy cap Instagram @{username}: {e}")
+            context.browser.close()
+            raise ValueError(f"Không thể truy cập Instagram @{username}: {e}")
 
         content = page.content()
         soup = BeautifulSoup(content, "html.parser")
@@ -119,22 +254,21 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         title_text = og_title.get("content") if og_title else page.title()
         avatar_url = og_image.get("content") if og_image else None
 
-        # Kiem tra neu bi Instagram chan bat dang nhap
-        if (
-            "login" in page.url.lower()
-            or (title_text.strip().lower() == "instagram" and "log in" in desc_text.lower())
-        ):
-            browser.close()
-            raise ValueError(
-                f"Profile @{username} yeu cau dang nhap (Co the do tai khoan rieng tu hoac bi han che). "
-                f"Vui long them cookie vao data/ig_cookies.json de cao tai khoan nay."
-            )
-
-        # Parse Followers
+        # Parse Followers trước khi kiểm tra login wall
         followers = 0
         f_match = re.search(r"([\d.,]+[KMBkmb]?)\s+Followers", desc_text, re.IGNORECASE)
         if f_match:
             followers = parse_instagram_number(f_match.group(1))
+
+        # Kiểm tra nếu bị Instagram chặn bắt đăng nhập hoàn toàn (không có cả meta OG followers)
+        if followers == 0 and (
+            "login" in page.url.lower()
+            or (title_text.strip().lower() == "instagram" and "log in" in desc_text.lower())
+        ):
+            context.browser.close()
+            raise ValueError(
+                f"Profile @{username} yêu cầu đăng nhập. Vui lòng thêm cookie vào data/ig_cookies.json để cào tài khoản này."
+            )
 
         # Parse Display Name
         display_name = username
@@ -158,109 +292,50 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         )
         public_phone = phone_match.group(0) if phone_match else None
 
-        # 2. Trích xuất bài đăng gần đây từ Relay / embedded script
-        recent_posts: List[Post] = []
-        user_pk = ""
+        # 2. Trích xuất bài đăng nhanh từ Relay / Script (Không cần mở từng post)
+        recent_posts, user_pk = extract_instagram_posts_from_soup(soup, max_posts=5)
 
-        for s in soup.find_all("script"):
-            stext = s.string or ""
-            if "polaris_ordered_timeline_connection" in stext or "XIGPolaris" in stext:
+        # 3. Chỉ Fallback mở từng post NẾU toàn bộ bài đăng đều không bóc được tương tác (likes=0, comments=0)
+        has_stats = any(p.likes > 0 or p.comments > 0 or p.views > 0 for p in recent_posts)
+        if not has_stats and recent_posts:
+            logger.info(f"[Instagram Crawler] Fallback mở bài đăng chi tiết để bóc tương tác cho @{username}...")
+            for post in recent_posts[:3]:
                 try:
-                    # Trích xuất user pk nếu có
-                    pk_m = re.search(r'"pk":"(\d+)"', stext)
-                    if pk_m and not user_pk:
-                        user_pk = pk_m.group(1)
-
-                    # Trích xuất các bài viết
-                    raw_edges = re.findall(
-                        r'\{"node":\{"__typename":"[^"]+","__isXIGPolarisMedia":"[^"]+","pk":"(\d+)","code":"([^"]+)",(?:.*?"caption":\{"text":"((?:[^"\\]|\\.)*)")?',
-                        stext,
+                    page.goto(post.postUrl, wait_until="domcontentloaded", timeout=12000)
+                    p_soup = BeautifulSoup(page.content(), "html.parser")
+                    p_meta = p_soup.find("meta", attrs={"property": "og:description"}) or p_soup.find(
+                        "meta", attrs={"name": "description"}
                     )
-                    for edge in raw_edges:
-                        if len(recent_posts) >= 3:
-                            break
-                        p_pk, p_code, p_caption = edge
-                        # Unescape unicode trong caption an toan (bao gom emoji)
-                        try:
-                            clean_cap = json.loads(f'"{p_caption}"')
-                        except Exception:
-                            clean_cap = p_caption.replace("\\n", "\n")
+                    p_desc = p_meta.get("content", "") if p_meta else ""
 
-                        recent_posts.append(
-                            Post(
-                                platformPostId=p_code,
-                                postUrl=f"https://www.instagram.com/p/{p_code}/",
-                                caption=clean_cap,
-                                views=0,
-                                likes=0,
-                                comments=0,
-                                shares=0,
-                                postedAt="",
-                            )
-                        )
-                except Exception as parse_err:
-                    print(f"[Instagram] Lỗi đọc post data: {parse_err}")
+                    l_match = re.search(r"([\d.,]+[KMBkmb]?)\s+likes?", p_desc, re.IGNORECASE)
+                    if l_match:
+                        post.likes = parse_instagram_number(l_match.group(1))
 
-        # Fallback lấy post URLs từ DOM nếu script parse không ra
-        if not recent_posts:
-            seen_codes = set()
-            for a in soup.find_all("a", href=True):
-                if len(recent_posts) >= 3:
-                    break
-                m = re.search(r"/(?:p|reel)/([A-Za-z0-9_-]+)/", a["href"])
-                if m:
-                    code = m.group(1)
-                    if code not in seen_codes:
-                        seen_codes.add(code)
-                        # Lay alt text cua img lam caption
-                        img = a.find("img")
-                        cap = img.get("alt", "") if img else ""
-                        recent_posts.append(
-                            Post(
-                                platformPostId=code,
-                                postUrl=f"https://www.instagram.com/p/{code}/",
-                                caption=cap,
-                                views=0,
-                                likes=0,
-                                comments=0,
-                                shares=0,
-                                postedAt="",
-                            )
-                        )
+                    c_match = re.search(r"([\d.,]+[KMBkmb]?)\s+comments?", p_desc, re.IGNORECASE)
+                    if c_match:
+                        post.comments = parse_instagram_number(c_match.group(1))
 
-        # 3. Bóc tách chi tiết tương tác (Likes, Comments, Views, Ngày đăng) cho các bài viết
-        for idx, post in enumerate(recent_posts):
-            try:
-                page.goto(post.postUrl, wait_until="domcontentloaded", timeout=12000)
-                p_soup = BeautifulSoup(page.content(), "html.parser")
-                p_meta = p_soup.find("meta", attrs={"property": "og:description"}) or p_soup.find(
-                    "meta", attrs={"name": "description"}
-                )
-                p_desc = p_meta.get("content", "") if p_meta else ""
+                    v_match = re.search(r"([\d.,]+[KMBkmb]?)\s+views?", p_desc, re.IGNORECASE)
+                    if v_match:
+                        post.views = parse_instagram_number(v_match.group(1))
 
-                l_match = re.search(r"([\d.,]+[KMBkmb]?)\s+likes?", p_desc, re.IGNORECASE)
-                if l_match:
-                    post.likes = parse_instagram_number(l_match.group(1))
+                    time_tag = p_soup.find("time")
+                    if time_tag and time_tag.get("datetime"):
+                        post.postedAt = time_tag.get("datetime")
+                except Exception as post_err:
+                    logger.warning(f"[Instagram] Lỗi đọc chi tiết bài viết {post.platformPostId}: {post_err}")
+        else:
+            logger.info(f"[Instagram Crawler] ✅ Đã bóc tương tác tức thì từ script GraphQL cho {len(recent_posts)} bài đăng (Bỏ qua page.goto)!")
 
-                c_match = re.search(r"([\d.,]+[KMBkmb]?)\s+comments?", p_desc, re.IGNORECASE)
-                if c_match:
-                    post.comments = parse_instagram_number(c_match.group(1))
+        try:
+            if not os.path.exists("data"):
+                os.makedirs("data")
+            context.storage_state(path=state_path)
+        except Exception:
+            pass
 
-                v_match = re.search(r"([\d.,]+[KMBkmb]?)\s+views?", p_desc, re.IGNORECASE)
-                if v_match:
-                    post.views = parse_instagram_number(v_match.group(1))
-
-                time_tag = p_soup.find("time")
-                if time_tag and time_tag.get("datetime"):
-                    post.postedAt = time_tag.get("datetime")
-                else:
-                    d_match = re.search(r"-\s+.*?on\s+([A-Za-z]+ \d{1,2}, \d{4})", p_desc)
-                    if d_match:
-                        post.postedAt = d_match.group(1)
-            except Exception as post_err:
-                print(f"[Instagram] Khong the lay chi tiet bai viet {post.platformPostId}: {post_err}")
-
-        browser.close()
+        context.browser.close()
 
         cross_links = re.findall(r"https?://[^\s\"'>]+", bio) if bio else []
         creator_info = CreatorInfo(
@@ -278,8 +353,8 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
             bioCrossLinks=cross_links,
         )
 
-        print(
-            f"[Instagram Crawler] Thanh cong: @{username} | Followers: {followers:,} | Posts: {len(recent_posts)}"
+        logger.info(
+            f"[Instagram Crawler] Hoàn tất: @{username} | Followers: {followers:,} | Posts: {len(recent_posts)}"
         )
 
         return IngestPayload(

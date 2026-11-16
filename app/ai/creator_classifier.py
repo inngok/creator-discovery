@@ -20,6 +20,7 @@ def classify_creator_type_smart(
     bio_links: list[str] = None,
     category: str = "",
     niche: str = "",
+    classified_type: str = "",
 ) -> str:
     """
     Phân loại thông minh KOC vs KOL dựa trên NỘI DUNG VÀ HÀNH VI (Content & Behavior-based).
@@ -54,6 +55,17 @@ def classify_creator_type_smart(
     profile_text = f"{username} {display_name} {bio} {category} {niche}".lower()
     full_text = f"{profile_text} {all_captions_text}"
 
+    # A later heuristic must never turn an existing entity rejection into KOC.
+    entity_type = (classified_type or "").strip().upper()
+    if entity_type in {"BRAND", "ORGANIZATION", "SPAM", "USER"}:
+        return entity_type
+    if re.search(
+        r"\b(?:official brand|official store|official shop|brand official|"
+        r"tài khoản chính thức của thương hiệu|kênh chính thức của thương hiệu|"
+        r"cửa hàng chính hãng|nhãn hàng chính thức|thương hiệu chính thức)\b", profile_text
+    ):
+        return "BRAND"
+
     # 2. Kiểm tra dấu hiệu Affiliate & Review đặc thù của KOC
     has_affiliate = False
     for domain in AFFILIATE_DOMAINS:
@@ -84,7 +96,7 @@ def classify_creator_type_smart(
 
     # B. Nếu có dấu hiệu KOC rõ rệt: Có link giỏ hàng/affiliate HOẶC có từ khóa review/unboxing/săn sale
     # Bất kể follower 500k, 1M hay 2M -> Vẫn là KOC (Key Opinion Consumer)
-    if has_affiliate or (koc_review_matches >= 2 and koc_opinion_matches >= 1):
+    if (has_affiliate and koc_review_matches >= 1) or (koc_review_matches >= 2 and koc_opinion_matches >= 1):
         # Nếu có lượng follower cực khủng (> 2M) và được coi là Đại sứ thương hiệu lớn
         if followers >= 2000000 and kol_influence_matches >= 2:
             return "KOL"
@@ -99,5 +111,5 @@ def classify_creator_type_smart(
     if followers >= 1000000 and has_work_contact:
         return "KOL"
 
-    # E. Mặc định các kênh sáng tạo nội dung cá nhân, làm video đời sống, chia sẻ trải nghiệm -> KOC
-    return "KOC"
+    # No affirmative review/influence evidence: do not invent KOC eligibility.
+    return "UNKNOWN"

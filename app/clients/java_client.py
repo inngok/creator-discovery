@@ -18,6 +18,9 @@ class JavaClient:
         self.secret_key = os.environ.get("JAVA_BACKEND_SECRET", "")
 
     def send_creator_data(self, payload: dict) -> bool:
+        payload = dict(payload)
+        if isinstance(payload.get("userName"), str):
+            payload["userName"] = payload["userName"].strip().lstrip("@").strip()
         try:
             response = httpx.post(
                 self.backend_url,

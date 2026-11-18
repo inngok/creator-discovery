@@ -46,6 +46,9 @@ def sync_creator_to_java_backend(
     unique_id = profile_dict["unique_id"]
     database_synced = False
     sync_error = None
+    latest = staging_repo.get_candidate(platform_upper, unique_id)
+    if latest and latest.decision == Decision.MANAGER_REJECTED:
+        return False, "MANAGER_REJECTED", decision_result.model_copy(update={"decision": Decision.MANAGER_REJECTED})
 
     if decision_result.decision not in [
         Decision.AUTO_ACCEPT_KOC,
@@ -106,7 +109,7 @@ def sync_creator_to_java_backend(
             )
             raise ValueError("AI classification does not qualify for creator ingest")
 
-        effective_type = "KOC" if decision_result.decision == Decision.NEEDS_MANAGER_REVIEW else decision_result.primary_type
+        effective_type = decision_result.primary_type if decision_result.primary_type in {"KOC", "KOL"} else "KOC"
         ai_obj.creatorType = effective_type
         ingest_payload = IngestPayload(
             creator=creator_obj,
@@ -136,6 +139,7 @@ def sync_creator_to_java_backend(
             logger.info(f"[LIVE SYNC] Đã gửi thành công @{unique_id} sang Java Backend Database!")
         else:
             sync_error = "JAVA_INGEST_FAILED"
+            staging_repo.update_status_and_decision(platform=platform_upper, username=unique_id, status=ProcessingStatus.FAILED)
     except Exception as ingest_err:
         sync_error = type(ingest_err).__name__
         logger.warning(f"[LIVE SYNC] Không thể gửi payload sang Java Backend: {ingest_err}")

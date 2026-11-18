@@ -13,6 +13,8 @@ app = Celery(
     "crawler_tasks", broker=redis_url, backend=redis_url, include=["app.workers.tasks"]
 )
 
+from kombu import Queue
+
 app.conf.update(
     broker_connection_retry_on_startup=False,
     broker_connection_max_retries=1,
@@ -28,6 +30,12 @@ app.conf.update(
     worker_concurrency=1,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    task_queues=(
+        Queue("preflight_queue"),
+        Queue("deep_crawl_queue"),
+        Queue("default"),
+        Queue("celery"),
+    ),
     task_routes={
         "app.workers.tasks.preflight_candidate_task": {"queue": "preflight_queue"},
         "app.workers.tasks.process_tiktok_profile": {"queue": "deep_crawl_queue"},

@@ -37,13 +37,12 @@ class JavaClient:
             try:
                 res_json = response.json()
                 data_obj = res_json.get("data", {})
-                if isinstance(data_obj, dict) and data_obj.get("status") == "REJECTED":
-                    logger.warning(
-                        f"Backend REJECTED ingest: {data_obj.get('message', 'No message')}"
-                    )
+                if res_json.get("success") is False or not isinstance(data_obj, dict) or data_obj.get("status") != "SUCCESS":
+                    logger.warning("Backend did not confirm successful creator ingestion")
                     return False
-            except Exception:
-                pass
+            except (ValueError, AttributeError, TypeError):
+                logger.warning("Backend returned an invalid ingestion response")
+                return False
 
             logger.info("Successfully sent payload to Java backend!")
             return True

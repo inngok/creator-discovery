@@ -14,6 +14,7 @@ from app.ai.services.embedding_service import embedding_service
 from app.ai.training_db import save_training_data
 from app.clients.java_client import java_client
 from app.core.logger import setup_logger
+from app.core.location_resolver import resolve_location
 from app.workers.tasks import preflight_candidate_task
 
 logger = setup_logger("import_excel")
@@ -247,7 +248,7 @@ def run_import(file_path: str, mode: str = "crawl", delay: float = 0.2, force: b
                 "displayName": d_name,
                 "avatarUrl": avatar,
                 "creatorType": "KOL" if f_count >= 500000 else "KOC",
-                "location": "Vietnam",
+                "location": resolve_location(display_name=d_name, username=uname),
                 "profileUrl": p_url,
                 "followers": f_count,
                 "avgViews": views,

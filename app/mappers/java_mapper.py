@@ -2,6 +2,7 @@ import re
 from app.ai.services.embedding_service import embedding_service
 from app.core.confidence import compute_data_confidence
 from app.core.fee_benchmark import get_estimated_fee
+from app.core.location_resolver import resolve_location
 from app.core.models import IngestPayload
 
 
@@ -82,7 +83,11 @@ class JavaMapper:
             "displayName": result.creator.displayName,
             "avatarUrl": result.creator.avatarUrl,
             "creatorType": creator_type,
-            "location": "Vietnam",
+            "location": resolve_location(
+                display_name=result.creator.displayName,
+                username=result.creator.username,
+                bio=result.creator.bio,
+            ),
             "profileUrl": result.creator.profileUrl,
             "followers": result.creator.followers,
             "estimatedFeeMin": est_fee_min,

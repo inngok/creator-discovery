@@ -1,5 +1,5 @@
-# Use Microsoft Playwright image as base for full Linux browser dependencies
-FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+# Python 3.11 is required by imports such as datetime.UTC.
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install chromium browser binary for Playwright
-RUN playwright install chromium
+RUN playwright install --with-deps chromium
 
 # Copy application code
 COPY . .

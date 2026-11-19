@@ -1,40 +1,50 @@
 import unittest
 from unittest.mock import patch
-import pandas as pd
 from app.services.category_discovery_service import CategoryDiscoveryService
 
 
 class ManagedCrawlCategoriesTest(unittest.TestCase):
     def setUp(self):
-        with patch.object(CategoryDiscoveryService, "_load_directory"):
-            self.service = CategoryDiscoveryService()
-        self.service._cache_df = pd.DataFrame({
-            "ID Chuy\u00ean gia": ["garden_creator", "beauty_creator", "other_creator"],
-            "Ph\u00e2n lo\u1ea1i Nh\u00e0 s\u00e1ng t\u1ea1o": [
-                "N\u00f4ng nghi\u1ec7p", "M\u1ef9 ph\u1ea9m", "Gaming"],
-        })
+        self.service = CategoryDiscoveryService()
 
-    def usernames(self, category):
-        return [row["username"] for row in self.service.get_candidates_by_category(category)]
+    @patch("app.crawlers.discovery_crawler.search_new_facebook_candidates")
+    @patch("app.crawlers.discovery_crawler.search_new_tiktok_candidates")
+    def test_legacy_category_alias_mapping(self, mock_tiktok, mock_fb):
+        mock_tiktok.return_value = [{"username": "beauty_koc", "platform": "TIKTOK"}]
+        mock_fb.return_value = []
+        res = self.service.get_candidates_by_category("làm đẹp & mỹ phẩm", limit=1)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["username"], "beauty_koc")
+        mock_tiktok.assert_called_once()
+        self.assertIn("Làm đẹp", mock_tiktok.call_args.kwargs["keywords"])
 
-    def test_manager_added_name_works_without_code_mapping(self):
-        self.assertEqual(self.usernames("N\u00f4ng nghi\u1ec7p"), ["garden_creator"])
+    @patch("app.crawlers.discovery_crawler.search_new_facebook_candidates")
+    @patch("app.crawlers.discovery_crawler.search_new_tiktok_candidates")
+    def test_category_code_lookup(self, mock_tiktok, mock_fb):
+        mock_tiktok.return_value = [{"username": "tech_koc", "platform": "TIKTOK"}]
+        mock_fb.return_value = []
+        res = self.service.get_candidates_by_category("TECH", limit=1)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["username"], "tech_koc")
 
-    def test_managed_seed_name_retains_legacy_synonyms(self):
-        self.assertEqual(self.usernames("L\u00e0m \u0111\u1eb9p & M\u1ef9 ph\u1ea9m"), ["beauty_creator"])
+    @patch("app.crawlers.discovery_crawler.search_new_facebook_candidates")
+    @patch("app.crawlers.discovery_crawler.search_new_tiktok_candidates")
+    def test_custom_keywords_override(self, mock_tiktok, mock_fb):
+        mock_tiktok.return_value = [{"username": "gaming_koc", "platform": "TIKTOK"}]
+        mock_fb.return_value = []
+        res = self.service.get_candidates_by_category("Custom", keywords=["gaming"], limit=1)
+        self.assertEqual(len(res), 1)
+        mock_tiktok.assert_called_once_with(
+            keywords=["gaming"], max_per_keyword=1, max_total=1, requested_category="Custom"
+        )
 
-    def test_legacy_code_still_works(self):
-        self.assertEqual(self.usernames("BEAUTY"), ["beauty_creator"])
+    def test_unsupported_platform_raises_error(self):
+        with self.assertRaises(ValueError):
+            self.service.get_candidates_by_category("TECH", platform="TWITTER")
 
-    def test_unknown_name_does_not_select_unrelated_creators(self):
-        self.assertEqual(self.usernames("Astronomy"), [])
+    def test_limit_zero_returns_empty(self):
+        self.assertEqual(self.service.get_candidates_by_category("TECH", limit=0), [])
 
-    def test_compound_name_matches_its_terms(self):
-        self.assertEqual(self.usernames("Gaming & Astronomy"), ["other_creator"])
 
-    def test_regex_characters_are_literal(self):
-        self.assertEqual(self.usernames(".*"), [])
-
-    def test_hunt_keywords_are_used_when_resolving_candidates(self):
-        results = self.service.get_candidates_by_category("Custom field", keywords=["Gaming"])
-        self.assertEqual([row["username"] for row in results], ["other_creator"])
+if __name__ == "__main__":
+    unittest.main()

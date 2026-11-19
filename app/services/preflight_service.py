@@ -13,6 +13,25 @@ from app.crawlers.preflight_fetcher import (
 
 logger = setup_logger("preflight_service")
 
+_PROFILE_URL_TEMPLATES = {
+    "TIKTOK": "https://www.tiktok.com/@{username}",
+    "FACEBOOK": "https://www.facebook.com/{username}",
+    "INSTAGRAM": "https://www.instagram.com/{username}",
+}
+
+_REFRESH_DECISION_BY_TYPE = {
+    "KOL": (Decision.AUTO_ACCEPT_KOL, "KOL"),
+    "KOC": (Decision.AUTO_ACCEPT_KOC, "KOC"),
+}
+
+
+def _get_preflight_fetcher(platform_upper: str):
+    return {
+        "TIKTOK": fetch_tiktok_preflight,
+        "FACEBOOK": fetch_facebook_preflight,
+        "INSTAGRAM": fetch_instagram_preflight,
+    }.get(platform_upper)
+
 
 class PreflightService:
     """
@@ -63,14 +82,9 @@ class PreflightService:
                 status=ProcessingStatus.PREFLIGHT_RUNNING,
             )
 
-            # 3. Gọi Lightweight Fetcher theo platform
-            fetch_result = None
-            if platform_upper == "TIKTOK":
-                fetch_result = fetch_tiktok_preflight(clean_user)
-            elif platform_upper == "FACEBOOK":
-                fetch_result = fetch_facebook_preflight(clean_user)
-            elif platform_upper == "INSTAGRAM":
-                fetch_result = fetch_instagram_preflight(clean_user)
+            # 3. Gọi Lightweight Fetcher theo platform (Declarative lookup)
+            fetcher_fn = _get_preflight_fetcher(platform_upper)
+            fetch_result = fetcher_fn(clean_user) if fetcher_fn else None
 
             # Xử lý khi Fetch thất bại
             if not fetch_result:
@@ -97,12 +111,16 @@ class PreflightService:
 
             profile, posts = fetch_result
 
-            # 4. Nếu là luồng Refresh Creator đã có trong hệ thống -> Bỏ qua Hard Reject, cho phép tiếp tục
+            # 4. Nếu là luồng Refresh Creator đã có trong hệ thống -> Bảo toàn loại hình KOL/KOC
             if is_refresh:
                 logger.info(f"[PREFLIGHT SERVICE] @{clean_user} là luồng Refresh -> Giữ nguyên quyết định hợp lệ.")
+                existing_type = getattr(existing_record, "primary_type", "KOC")
+                ref_decision, ref_type = _REFRESH_DECISION_BY_TYPE.get(
+                    existing_type, (Decision.AUTO_ACCEPT_KOC, "KOC")
+                )
                 decision_result = RuleDecisionResult(
-                    decision=Decision.AUTO_ACCEPT_KOC,
-                    primary_type="KOC",
+                    decision=ref_decision,
+                    primary_type=ref_type,
                     reason_codes=["REFRESH_EXISTING_CREATOR"],
                 )
             else:
@@ -122,12 +140,15 @@ class PreflightService:
                     logger.warning("AI second opinion failed: %s", type(exc).__name__)
 
             # 6. Lưu kết quả vào Staging Repository
+            url_template = _PROFILE_URL_TEMPLATES.get(
+                platform_upper, "https://www.tiktok.com/@{username}"
+            )
             candidate_record = CandidateStagingRecord(
                 platform=platform_upper,
                 external_id=profile.external_id,
                 username=clean_user,
                 display_name=profile.display_name,
-                profile_url=f"https://www.tiktok.com/@{clean_user}" if platform_upper == "TIKTOK" else f"https://www.facebook.com/{clean_user}",
+                profile_url=url_template.format(username=clean_user),
                 processing_status=ProcessingStatus.PREFLIGHT_DONE,
                 decision=decision_result.decision,
                 primary_type=decision_result.primary_type,

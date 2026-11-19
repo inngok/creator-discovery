@@ -1,7 +1,64 @@
+x-crawler: &crawler
+  build: .
+  image: influencermatch-crawler:local
+  restart: unless-stopped
+  init: true
+  env_file: .env
+  environment:
+    REDIS_URL: redis://redis:6379/0
+    HF_HOME: /app/cache/huggingface
+  volumes:
+    - ./data:/app/data
+    - ./app/ai/data:/app/app/ai/data
+    - ./app/ai/models:/app/app/ai/models
+    - model_cache:/app/cache
+  depends_on:
+    redis:
+      condition: service_healthy
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   redis:
     image: redis:7-alpine
     container_name: python_crawler_redis
     restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    <<: *crawler
     ports:
-      - "6380:6379"
+      - "127.0.0.1:8000:8000"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    <<: *crawler
+    shm_size: "1gb"
+    stop_grace_period: 5m
+    command: celery -A app.workers.celery_app worker --loglevel=info --pool=threads --concurrency=1 -Q preflight_queue,deep_crawl_queue,default,celery
+
+  beat:
+    <<: *crawler
+    command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/app/beat/celerybeat-schedule
+    volumes:
+      - beat_data:/app/beat
+
+volumes:
+  redis_data:
+  model_cache:
+  beat_data:

@@ -25,37 +25,36 @@ class TestLiveCrawlAndMetrics(unittest.TestCase):
         self.assertIn("activities", data)
         self.assertIn("crawled_data", data)
 
-    @patch("app.services.live_crawl_service.fetch_tiktok_ssr_raw_data")
+    @patch("app.services.live_crawl_service.fetch_raw_creator_profile")
     def test_test_scrape_success(self, mock_fetch):
-        mock_fetch.return_value = {
-            "__DEFAULT_SCOPE__": {
-                "webapp.user-detail": {
-                    "userInfo": {
-                        "user": {
-                            "id": "11223344",
-                            "uniqueId": "test_beauty_koc",
-                            "nickname": "Test Beauty KOC",
-                            "signature": "Review mỹ phẩm xịn",
-                            "verified": True,
-                        },
-                        "stats": {
-                            "followerCount": 150000,
-                            "followingCount": 200,
-                            "heartCount": 1200000,
-                            "videoCount": 80,
-                        },
-                    },
-                    "itemList": [
-                        {
-                            "id": "v123",
-                            "desc": "Top 5 son dưỡng môi tốt nhất",
-                            "stats": {"playCount": 50000, "diggCount": 3500, "commentCount": 120, "shareCount": 45},
-                            "createTime": 1700000000,
-                        }
-                    ],
+        mock_fetch.return_value = (
+            {
+                "author_id": "11223344",
+                "unique_id": "test_beauty_koc",
+                "display_name": "Test Beauty KOC",
+                "followers": 150000,
+                "following": 200,
+                "heart_count": 1200000,
+                "video_count": 80,
+                "bio": "Review mỹ phẩm xịn",
+                "avatar_url": "",
+                "is_verified": True,
+                "profile_url": "https://www.tiktok.com/@test_beauty_koc",
+                "latency_ms": 100.0,
+            },
+            [
+                {
+                    "platformPostId": "v123",
+                    "caption": "Top 5 son dưỡng môi tốt nhất",
+                    "views": 50000,
+                    "likes": 3500,
+                    "comments": 120,
+                    "shares": 45,
+                    "postedAt": "2024-01-01T00:00:00Z",
                 }
-            }
-        }
+            ],
+            None,
+        )
 
         res = self.client.post("/api/v1/crawl/test-scrape", json={"profile_url": "test_beauty_koc", "platform": "TIKTOK"})
         self.assertEqual(res.status_code, 200)
@@ -80,30 +79,31 @@ class TestLiveCrawlAndMetrics(unittest.TestCase):
         self.assertEqual(summary["discovery_shortfall"], 2)
         self.assertEqual(summary["failed_count"], 0)
 
-    @patch("app.services.live_crawl_service.fetch_tiktok_ssr_raw_data")
-    def test_batch_crawl_by_category(self, mock_fetch):
-        mock_fetch.return_value = {
-            "__DEFAULT_SCOPE__": {
-                "webapp.user-detail": {
-                    "userInfo": {
-                        "user": {
-                            "id": "99887766",
-                            "uniqueId": "sample_creator",
-                            "nickname": "Sample Creator",
-                            "signature": "Bio",
-                            "verified": False,
-                        },
-                        "stats": {
-                            "followerCount": 85000,
-                            "followingCount": 100,
-                            "heartCount": 500000,
-                            "videoCount": 50,
-                        },
-                    },
-                    "itemList": [],
-                }
-            }
-        }
+    @patch("app.api.routers.crawl_router.category_discovery_service.get_candidates_by_category")
+    @patch("app.services.live_crawl_service.fetch_raw_creator_profile")
+    def test_batch_crawl_by_category(self, mock_fetch, mock_discover):
+        mock_discover.return_value = [
+            {"username": "sample_creator_1", "platform": "TIKTOK"},
+            {"username": "sample_creator_2", "platform": "TIKTOK"},
+        ]
+        mock_fetch.return_value = (
+            {
+                "author_id": "99887766",
+                "unique_id": "sample_creator",
+                "display_name": "Sample Creator",
+                "followers": 85000,
+                "following": 100,
+                "heart_count": 500000,
+                "video_count": 50,
+                "bio": "Bio",
+                "avatar_url": "",
+                "is_verified": False,
+                "profile_url": "https://www.tiktok.com/@sample_creator",
+                "latency_ms": 120.0,
+            },
+            [],
+            None,
+        )
 
         res = self.client.post(
             "/api/v1/crawl/batch-crawl",

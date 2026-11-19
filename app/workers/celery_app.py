@@ -16,8 +16,8 @@ app = Celery(
 from kombu import Queue
 
 app.conf.update(
-    broker_connection_retry_on_startup=False,
-    broker_connection_max_retries=1,
+    broker_connection_retry_on_startup=True,
+    broker_connection_max_retries=None,
     broker_transport_options={
         "socket_timeout": 1.5,
         "socket_connect_timeout": 1.5,

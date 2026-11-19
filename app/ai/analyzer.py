@@ -19,21 +19,25 @@ from app.ai.schemas import PredictionResult
 from app.ai.grounded_enrichment import build_content_summary, has_label_evidence, resolve_grounded_fallback_labels
 from app.ai.services.embedding_service import embedding_service
 from app.core.models import AIEnrichment, CreatorInfo, Post
+from app.core.logger import setup_logger
 
+logger = setup_logger("ai_analyzer")
 load_dotenv()
 
 # Tải Prototypes từ file JSON (thay cho Hardcode)
-import os
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROTOTYPES_PATH = os.path.join(BASE_DIR, "data", "prototypes.json")
 try:
-    with open(PROTOTYPES_PATH, "r", encoding="utf-8") as f:
-        _protos = json.load(f)
-        CATEGORY_PROTOTYPES = _protos.get("CATEGORY_PROTOTYPES", {})
-        NICHE_PROTOTYPES = _protos.get("NICHE_PROTOTYPES", {})
+    if os.path.exists(PROTOTYPES_PATH):
+        with open(PROTOTYPES_PATH, "r", encoding="utf-8") as f:
+            _protos = json.load(f)
+            CATEGORY_PROTOTYPES = _protos.get("CATEGORY_PROTOTYPES", {})
+            NICHE_PROTOTYPES = _protos.get("NICHE_PROTOTYPES", {})
+    else:
+        CATEGORY_PROTOTYPES = {}
+        NICHE_PROTOTYPES = {}
 except Exception as e:
-    logger.info(f"[!] Không tìm thấy prototypes.json: {e}")
+    logger.warning(f"[!] Không tìm thấy prototypes.json: {e}")
     CATEGORY_PROTOTYPES = {}
     NICHE_PROTOTYPES = {}
 # ==========================================
@@ -302,9 +306,6 @@ def _extract_tags(text: str) -> list[str]:
 
 
 from app.ai.training_db import save_training_data
-from app.core.logger import setup_logger
-
-logger = setup_logger(__name__)
 
 
 def get_llm_enrichment(prompt: str) -> dict | None:

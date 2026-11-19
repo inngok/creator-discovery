@@ -102,7 +102,10 @@ KOC_REVIEW_ACTION_PHRASES = [
     "review", "unboxing", "mở hộp", "trên tay", "dùng thử",
     "đánh giá", "trải nghiệm", "cảm nhận", "test thử", "thử nghiệm",
     "săn sale", "mua ở đây", "link mua", "mua thử", "so sánh",
-    "unbox", "swatch", "haul", "thử thách", "thử đồ"
+    "unbox", "swatch", "haul", "thử thách", "thử đồ",
+    "thánh công nghệ", "thanhcongnghe", "test game", "test pin",
+    "so sánh camera", "xếp hạng", "top điện thoại", "trên tay nhanh",
+    "đập hộp", "đồ công nghệ", "công nghệ đáng mua"
 ]
 REGEX_KOC_REVIEW = build_boundary_regex(KOC_REVIEW_ACTION_PHRASES)
 
@@ -113,7 +116,9 @@ KOC_OPINION_PHRASES = [
     "khen nha", "nên cân nhắc", "độ bền", "chất lượng tốt", "chất lượng kém",
     "so với giá", "đáng tiền", "phí tiền", "chấm điểm", "rating",
     "trải nghiệm thực tế", "sau 1 tháng", "sau 2 tuần", "sau khi dùng",
-    "chấm 8/10", "chấm 9/10", "chấm 10/10", "chấm 7/10"
+    "chấm 8/10", "chấm 9/10", "chấm 10/10", "chấm 7/10",
+    "tái định nghĩa", "rác phẩm", "đáng mua nhất", "tính năng ẩn",
+    "khuyên thật lòng", "cảm nhận cá nhân", "thực tế sau"
 ]
 REGEX_KOC_OPINION = build_boundary_regex(KOC_OPINION_PHRASES)
 

@@ -27,10 +27,11 @@ logger = setup_logger("preflight_fetcher")
 def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
     """
     Lightweight SSR Fetcher chung cho TikTok:
-    - Chỉ tải DOM (`domcontentloaded`) với timeout ngắn (12 giây).
-    - Chờ thẻ <script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"> chứa dữ liệu SSR.
-    - TUYỆT ĐỐI KHÔNG: Cuộn trang, không mở network interceptor, không sleep(10-30s).
-    - Trả về dictionary dữ liệu SSR đã được parse.
+    - Tải DOM (`domcontentloaded`) với timeout ngắn.
+    - Đón bắt đồng bộ API post/item_list để lấy danh sách bài đăng gần nhất.
+    - Dự phòng bóc tách link video từ DOM nếu API bị chặn.
+    - Chờ thẻ <script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"> chứa dữ liệu SSR profile.
+    - Trả về dictionary dữ liệu SSR đã được parse kèm mảng itemList video.
     """
     clean_user = username.strip().removeprefix("@")
     if "tiktok.com" in clean_user:
@@ -39,6 +40,7 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
             clean_user = match.group(1)
 
     url = f"https://www.tiktok.com/@{clean_user}"
+    captured_posts: list[dict] = []
 
     with sync_playwright() as p:
         context, _ = _init_playwright_context(p)
@@ -46,12 +48,32 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
         stealth = Stealth()
         stealth.apply_stealth_sync(page)
 
+        def handle_response(res):
+            if "item_list" in res.url and res.status == 200:
+                try:
+                    text = res.text()
+                    if text and text.strip().startswith("{"):
+                        body = json.loads(text)
+                        items = body.get("itemList", [])
+                        if items and not captured_posts:
+                            captured_posts.extend(items)
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
+
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=12000)
+            page.goto(url, wait_until="domcontentloaded", timeout=15000)
             try:
                 page.wait_for_selector("#__UNIVERSAL_DATA_FOR_REHYDRATION__", timeout=5000)
             except Exception:
                 pass
+
+            # Chờ tối đa 2.5s để API post/item_list kịp phản hồi
+            for _ in range(5):
+                if captured_posts:
+                    break
+                page.wait_for_timeout(500)
 
             content = page.content()
         except Exception as e:
@@ -67,10 +89,34 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
         return None
 
     try:
-        return json.loads(script_tag.string)
+        data = json.loads(script_tag.string)
     except Exception as e:
         logger.error(f"[PREFLIGHT] Lỗi parse JSON SSR cho @{clean_user}: {e}")
         return None
+
+    # Dự phòng bóc video trực tiếp từ DOM nếu API post/item_list chưa bắt được
+    if not captured_posts:
+        for a in soup.select("a[href*='/video/']"):
+            href = a.get("href", "")
+            text = a.get_text(strip=True)
+            img = a.find("img")
+            alt = img.get("alt", "") if img else ""
+            desc = text or alt
+            pid = href.split("/video/")[-1].split("?")[0] if "/video/" in href else ""
+            if pid and not any(str(p.get("id")) == pid for p in captured_posts):
+                captured_posts.append({
+                    "id": pid,
+                    "desc": desc,
+                    "stats": {"playCount": 0, "diggCount": 0, "commentCount": 0, "shareCount": 0},
+                    "video": {"cover": img.get("src", "") if img else ""},
+                })
+
+    if captured_posts:
+        data["itemList"] = captured_posts
+        if "__DEFAULT_SCOPE__" in data and "webapp.user-detail" in data["__DEFAULT_SCOPE__"]:
+            data["__DEFAULT_SCOPE__"]["webapp.user-detail"]["itemList"] = captured_posts
+
+    return data
 
 
 def fetch_tiktok_author_info(username: str) -> dict | None:
@@ -205,17 +251,17 @@ def fetch_tiktok_preflight(username: str) -> tuple[ProfileMetadata, list[PostPre
         is_verified=bool(user_info.get("verified", False)),
     )
 
-    # Bóc tách 5 bài đăng đầu tiên từ mảng itemList trong SSR (nếu có)
+    # Bóc tách tối đa 10 bài đăng đầu tiên từ mảng itemList trong SSR (nếu có)
     posts: list[PostPreview] = []
     item_list = data.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("itemList", [])
     if not item_list:
         # Thử tìm trong các scope khác của SSR
         item_list = data.get("itemList", [])
 
-    for item in item_list[:5]:
+    for item in item_list[:10]:
         pid = str(item.get("id", ""))
         caption = item.get("desc", "")
-        stats = item.get("stats", {})
+        stats = item.get("stats", {}) or {}
         create_time = item.get("createTime")
         posted_at = None
         if create_time:
@@ -229,8 +275,8 @@ def fetch_tiktok_preflight(username: str) -> tuple[ProfileMetadata, list[PostPre
             post_id=pid,
             caption=caption,
             created_at=posted_at,
-            views=int(stats.get("playCount", 0)),
-            likes=int(stats.get("diggCount", 0)),
+            views=int(stats.get("playCount", 0) or 0),
+            likes=int(stats.get("diggCount", 0) or 0),
         ))
 
     return profile, posts

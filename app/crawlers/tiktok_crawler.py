@@ -239,11 +239,38 @@ def _crawl_tiktok_profile_sync(username: str) -> IngestPayload | None:
 
             # Scroll để trigger fetch list video API
             for _ in range(3):
-                if len(recent_posts) >= 3:
+                if len(recent_posts) >= 5:
                     break
                 scroll_amount = random.randint(800, 1500)
                 page.evaluate(f"window.scrollBy(0, {scroll_amount});")
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(2000)
+
+            # Dự phòng bóc trực tiếp từ DOM nếu network interception chưa kịp lấy
+            if not recent_posts:
+                content = page.content()
+                soup = BeautifulSoup(content, "html.parser")
+                for a in soup.select("a[href*='/video/']"):
+                    if len(recent_posts) >= 5:
+                        break
+                    href = a.get("href", "")
+                    text = a.get_text(strip=True)
+                    img = a.find("img")
+                    alt = img.get("alt", "") if img else ""
+                    desc = text or alt
+                    pid = href.split("/video/")[-1].split("?")[0] if "/video/" in href else ""
+                    if pid and not any(p.platformPostId == pid for p in recent_posts):
+                        recent_posts.append(
+                            Post(
+                                platformPostId=pid,
+                                postUrl=f"https://www.tiktok.com/@{username}/video/{pid}",
+                                caption=desc,
+                                views=0,
+                                likes=0,
+                                comments=0,
+                                shares=0,
+                                postedAt=None,
+                            )
+                        )
 
             creator_info = _extract_user_info_from_dom(page, username, url)
 

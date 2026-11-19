@@ -1,14 +1,19 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
+
+os.environ["TESTING"] = "1"
 
 from app.ai.rules.rule_config import Decision, ProcessingStatus
 from app.ai.rules.rule_engine import RuleDecisionResult
 from app.core.candidate_staging import CandidateStagingRecord, staging_repo
 from app.workers.tasks import (
+    auto_refresh_creators_in_db_task,
     preflight_candidate_task,
     process_facebook_profile,
     process_instagram_profile,
     process_tiktok_profile,
+    weekly_discover_new_creators_task,
 )
 
 
@@ -234,10 +239,11 @@ class TestCeleryGatesAndPipeline(unittest.TestCase):
             args=[username], queue="deep_crawl_queue"
         )
 
+    @patch("app.api.routers.crawl_router.is_redis_available", return_value=True)
     @patch("app.api.routers.crawl_router.process_tiktok_profile.delay")
     @patch("app.api.routers.crawl_router.preflight_candidate_task.delay")
     def test_api_enqueue_tiktok_routes_to_preflight_by_default(
-        self, mock_preflight_delay, mock_deep_delay
+        self, mock_preflight_delay, mock_deep_delay, _mock_redis
     ):
         """Kiểm tra API /enqueue mặc định đi qua Preflight Gate."""
         import asyncio
@@ -251,15 +257,25 @@ class TestCeleryGatesAndPipeline(unittest.TestCase):
         mock_preflight_delay.assert_called_once_with("TIKTOK", "creator_user_1")
         mock_deep_delay.assert_not_called()
 
+    @patch("app.api.routers.crawl_router.is_redis_available", return_value=True)
     @patch("app.api.routers.crawl_router.process_tiktok_profile.delay")
     @patch("app.api.routers.crawl_router.preflight_candidate_task.delay")
     def test_api_enqueue_tiktok_force_deep_crawl(
-        self, mock_preflight_delay, mock_deep_delay
+        self, mock_preflight_delay, mock_deep_delay, _mock_redis
     ):
         """Kiểm tra API /enqueue với force_deep_crawl=True kích hoạt Deep Crawl."""
         import asyncio
         from app.api.routers.crawl_router import EnqueueCandidateRequest, enqueue_candidate
 
+        staging_repo.upsert_candidate(
+            CandidateStagingRecord(
+                platform="TIKTOK",
+                username="creator_user_2",
+                processing_status=ProcessingStatus.PREFLIGHT_DONE,
+                decision=Decision.AUTO_ACCEPT_KOC,
+                primary_type="KOC",
+            )
+        )
         mock_deep_delay.return_value = MagicMock(id="task-mock-deep-1")
         req = EnqueueCandidateRequest(platform="TIKTOK", username="creator_user_2", force_deep_crawl=True)
         res = asyncio.run(enqueue_candidate(req))
@@ -267,6 +283,62 @@ class TestCeleryGatesAndPipeline(unittest.TestCase):
         self.assertEqual(res["mode"], "FORCE_DEEP_CRAWL")
         mock_deep_delay.assert_called_once_with("creator_user_2", is_refresh=True)
         mock_preflight_delay.assert_not_called()
+
+    @patch("app.workers.tasks.process_tiktok_profile.apply_async")
+    @patch("app.services.preflight_service.preflight_service.run_preflight")
+    def test_preflight_preserves_is_refresh_flag_to_deep_crawl(
+        self, mock_run_preflight, mock_deep_crawl_apply
+    ):
+        """Kiểm tra preflight_candidate_task truyền cờ is_refresh=True sang Deep Crawl."""
+        username = "refresh_creator_koc"
+        mock_run_preflight.return_value = RuleDecisionResult(
+            decision=Decision.AUTO_ACCEPT_KOC,
+            primary_type="KOC",
+            reason_codes=["REFRESH_EXISTING_CREATOR"],
+        )
+
+        preflight_candidate_task.run(platform="TIKTOK", username=username, is_refresh=True)
+        mock_deep_crawl_apply.assert_called_once_with(
+            args=[username, True], queue="deep_crawl_queue"
+        )
+
+    @patch("app.workers.tasks.preflight_candidate_task.delay")
+    @patch("app.crawlers.discovery_crawler.search_new_facebook_candidates")
+    @patch("app.crawlers.discovery_crawler.search_new_tiktok_candidates")
+    def test_weekly_discovery_isolates_platform_error_and_enqueues_valid_candidates(
+        self, mock_tiktok_search, mock_fb_search, mock_preflight_delay
+    ):
+        """Kiểm tra luồng Discovery không bị hủy kết quả TikTok khi Facebook gặp lỗi."""
+        mock_tiktok_search.return_value = [
+            {"platform": "TIKTOK", "username": "brand_new_tiktok_koc_2026", "followers": 25000}
+        ]
+        mock_fb_search.side_effect = RuntimeError("Facebook login required")
+
+        with patch.object(staging_repo, "get_candidate", return_value=None):
+            summary = weekly_discover_new_creators_task.run(
+                max_new_kocs=5, keywords=["review mỹ phẩm"], platform="ALL"
+            )
+
+        self.assertEqual(summary["status"], "COMPLETED")
+        self.assertEqual(summary["new_kocs_enqueued"], 1)
+        self.assertIn("FACEBOOK", summary["platform_errors"])
+        mock_preflight_delay.assert_called_once_with("TIKTOK", "brand_new_tiktok_koc_2026")
+
+    @patch("app.workers.tasks.process_tiktok_profile.apply_async")
+    @patch("app.workers.tasks._fetch_stale_targets_from_pg")
+    def test_auto_refresh_dispatches_directly_to_deep_crawl_with_is_refresh(
+        self, mock_fetch_pg, mock_deep_apply
+    ):
+        """Kiểm tra luồng Refresh định kỳ đẩy thẳng vào Deep Crawl queue với is_refresh=True."""
+        mock_fetch_pg.return_value = [
+            {"platform": "TIKTOK", "username": "stale_koc_for_refresh"}
+        ]
+        summary = auto_refresh_creators_in_db_task.run(limit=10)
+        self.assertEqual(summary["status"], "COMPLETED")
+        self.assertEqual(summary["enqueued_count"], 1)
+        mock_deep_apply.assert_called_once_with(
+            args=["stale_koc_for_refresh", True], queue="deep_crawl_queue"
+        )
 
 
 if __name__ == "__main__":

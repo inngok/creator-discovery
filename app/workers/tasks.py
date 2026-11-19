@@ -1,12 +1,13 @@
 import json
-from typing import Optional
+import os
+from typing import Callable, Optional
 
 from app.ai.analyzer import process_ai_enrichment
 from app.ai.creator_classifier import classify_creator_type_smart
 from app.ai.rules.post_validator import validate_post_crawl
 from app.ai.rules.rule_config import Decision, ProcessingStatus
 from app.clients.java_client import java_client
-from app.core.candidate_staging import staging_repo
+from app.core.candidate_staging import CandidateStagingRecord, staging_repo
 from app.core.logger import setup_logger
 from app.crawlers.facebook_crawler import _crawl_facebook_profile_sync
 from app.crawlers.instagram_crawler import _crawl_instagram_profile_sync
@@ -17,6 +18,35 @@ from app.services.preflight_service import preflight_service
 from .celery_app import app
 
 logger = setup_logger("celery_tasks")
+
+AUTHORIZED_DEEP_CRAWL_DECISIONS = {
+    Decision.AUTO_ACCEPT_KOC,
+    Decision.AUTO_ACCEPT_KOL,
+    Decision.MANAGER_APPROVED,
+}
+VALID_CREATOR_TYPES = {"KOL", "KOC"}
+
+
+def _get_deep_crawl_task(platform: str):
+    """Bảng ánh xạ (Dispatch Table) chọn Deep Crawl Task theo nền tảng (0 if-else)."""
+    return {
+        "TIKTOK": process_tiktok_profile,
+        "FACEBOOK": process_facebook_profile,
+        "INSTAGRAM": process_instagram_profile,
+    }.get((platform or "").upper())
+
+
+def _get_pg_connection():
+    """Khởi tạo kết nối PostgreSQL từ biến môi trường."""
+    import psycopg2
+
+    return psycopg2.connect(
+        host=os.environ.get("DB_HOST", "221.121.3.226"),
+        user=os.environ.get("DB_USER", "influencermatch_user"),
+        password=os.environ.get("DB_PASSWORD", "12345"),
+        dbname=os.environ.get("DB_NAME", "influencermatch_dev"),
+        connect_timeout=5,
+    )
 
 
 # ==============================================================================
@@ -35,37 +65,32 @@ def preflight_candidate_task(
     - Nếu AUTO_REJECT hoặc NEEDS_MANAGER_REVIEW -> KHÔNG kích hoạt Deep Crawl
     """
     clean_user = username.removeprefix("@").strip()
-    logger.info(f"[CELERY PREFLIGHT] Đang xử lý {platform}: @{clean_user}")
+    plat_upper = (platform or "TIKTOK").upper()
+    logger.info(f"[CELERY PREFLIGHT] Đang xử lý {plat_upper}: @{clean_user}")
     try:
         decision_result = preflight_service.run_preflight(
-            platform=platform, username=clean_user, is_refresh=is_refresh
+            platform=plat_upper, username=clean_user, is_refresh=is_refresh
         )
-
         decision = decision_result.decision
-        if decision in [
-            Decision.AUTO_ACCEPT_KOC,
-            Decision.AUTO_ACCEPT_KOL,
-            Decision.MANAGER_APPROVED,
-        ]:
+
+        if decision == Decision.RETRY_PREFLIGHT:
+            raise self.retry(countdown=180)
+
+        if decision in AUTHORIZED_DEEP_CRAWL_DECISIONS:
             staging_repo.update_status_and_decision(
-                platform=platform.upper(),
+                platform=plat_upper,
                 username=clean_user,
                 status=ProcessingStatus.DEEP_CRAWL_QUEUED,
                 decision=decision,
             )
-            # Kích hoạt Deep Crawl vào hàng đợi deep_crawl_queue
-            if platform.upper() == "TIKTOK":
-                process_tiktok_profile.apply_async(args=[clean_user], queue="deep_crawl_queue")
-            elif platform.upper() == "FACEBOOK":
-                process_facebook_profile.apply_async(args=[clean_user], queue="deep_crawl_queue")
-            elif platform.upper() == "INSTAGRAM":
-                process_instagram_profile.apply_async(args=[clean_user], queue="deep_crawl_queue")
+            task_fn = _get_deep_crawl_task(plat_upper)
+            if task_fn:
+                task_args = [clean_user, True] if is_refresh else [clean_user]
+                task_fn.apply_async(args=task_args, queue="deep_crawl_queue")
 
             logger.info(
                 f"[CELERY PREFLIGHT GATE] Đã kích hoạt Deep Crawl cho @{clean_user} (Decision: {decision.value})"
             )
-        elif decision == Decision.RETRY_PREFLIGHT:
-            raise self.retry(countdown=180)
         else:
             logger.info(
                 f"[CELERY PREFLIGHT GATE] KHÔNG Deep Crawl @{clean_user} do Decision: {decision.value} "
@@ -87,27 +112,28 @@ def preflight_candidate_task(
 # ==============================================================================
 # PHA 2: CELERY DEEP CRAWL TASKS (Cào sâu đầy đủ - Chỉ chạy khi đã qua GATE)
 # ==============================================================================
-@app.task(bind=True, max_retries=3, queue="deep_crawl_queue")
-def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Optional[dict]:
+def _execute_deep_crawl(
+    task_self,
+    platform: str,
+    username: str,
+    crawl_fn: Callable[[str], Optional[object]],
+    is_refresh: bool = False,
+    retry_countdown: int = 180,
+) -> Optional[dict]:
+    """Luồng xử lý Deep Crawl hợp nhất cho mọi nền tảng với Guard Clauses phẳng (hạn chế if-else lồng nhau)."""
+    plat = platform.upper()
     clean_user = username.removeprefix("@").strip()
-    logger.info(f"[WORKER] Starting TikTok crawl check for: @{clean_user}")
+    logger.info(f"[WORKER] Starting {plat} crawl check for: @{clean_user}")
 
-    # 🛡️ CELERY DEEP CRAWL GATE (Double-Check Guard)
-    staging_record = staging_repo.get_candidate("TIKTOK", clean_user)
-    is_authorized = (
-        is_refresh
-        or (
-            staging_record is not None
-            and staging_record.decision in [
-                Decision.AUTO_ACCEPT_KOC,
-                Decision.AUTO_ACCEPT_KOL,
-                Decision.MANAGER_APPROVED,
-            ]
-        )
+    # 🛡️ GUARD 1: CELERY DEEP CRAWL GATE (Double-Check Guard)
+    staging_record = staging_repo.get_candidate(plat, clean_user)
+    is_authorized = is_refresh or (
+        staging_record is not None
+        and staging_record.decision in AUTHORIZED_DEEP_CRAWL_DECISIONS
     )
     if not is_authorized:
         logger.error(
-            f"[DEEP CRAWL GATE BLOCKED] Từ chối Deep Crawl @{clean_user}: "
+            f"[DEEP CRAWL GATE BLOCKED] Từ chối Deep Crawl {plat} @{clean_user}: "
             f"Chưa qua Preflight hoặc chưa được duyệt! (Staging Decision: {getattr(staging_record, 'decision', 'NONE')})"
         )
         return {
@@ -116,337 +142,128 @@ def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Opt
             "username": clean_user,
         }
 
-    # Cập nhật trạng thái đang Deep Crawl
-    staging_repo.update_status_and_decision(
-        platform="TIKTOK",
-        username=clean_user,
-        status=ProcessingStatus.DEEP_CRAWLING,
-    )
+    # Đảm bảo hồ sơ từ PostgreSQL trong luồng Refresh luôn có bản ghi theo dõi tại Staging
+    if staging_record is None and is_refresh:
+        staging_repo.upsert_candidate(
+            CandidateStagingRecord(
+                platform=plat,
+                username=clean_user,
+                processing_status=ProcessingStatus.DEEP_CRAWLING,
+                decision=Decision.AUTO_ACCEPT_KOC,
+                primary_type="KOC",
+                reason_codes=["REFRESH_EXISTING_CREATOR"],
+            )
+        )
+    else:
+        staging_repo.update_status_and_decision(
+            platform=plat,
+            username=clean_user,
+            status=ProcessingStatus.DEEP_CRAWLING,
+        )
 
     try:
-        result = _crawl_tiktok_profile_sync(clean_user)
-
-        if result:
-            # 🛡️ POST-CRAWL VALIDATION GUARD
-            post_val = validate_post_crawl(result, is_refresh=is_refresh)
-            if not post_val.is_valid:
-                logger.warning(
-                    f"[WORKER] QUARANTINE @{clean_user}: Không đạt Post-Validation Guard "
-                    f"(Lý do: {post_val.quarantine_reason}, Chi tiết: {post_val.details})"
-                )
-                staging_repo.update_status_and_decision(
-                    platform="TIKTOK",
-                    username=clean_user,
-                    status=ProcessingStatus.FAILED,
-                    decision=Decision.AUTO_REJECT,
-                    reason_codes=[post_val.quarantine_reason or "QUARANTINE_POST_VALIDATION_FAILED"],
-                )
-                return {
-                    "status": "QUARANTINE_REJECTED",
-                    "reason": post_val.quarantine_reason,
-                    "details": post_val.details,
-                    "username": clean_user,
-                }
-
-            # Chạy AI ở background worker
-            result.aiEnrichment = process_ai_enrichment(
-                result.creator, result.recentPosts
+        result = crawl_fn(clean_user)
+        if not result:
+            logger.warning(f"[WORKER] FAILED: Could not crawl {plat} @{clean_user}. Retrying...")
+            staging_repo.update_status_and_decision(
+                platform=plat,
+                username=clean_user,
+                status=ProcessingStatus.FAILED,
+                reason_codes=["DEEP_CRAWL_EMPTY_RESULT"],
             )
+            raise task_self.retry(countdown=retry_countdown)
 
-            with open("data/crawled_results.jsonl", "a", encoding="utf-8") as f:
-                f.write(
-                    json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
-                    + "\n"
-                )
-
-            smart_type = classify_creator_type_smart(
-                username=result.creator.username,
-                display_name=result.creator.displayName,
-                bio=result.creator.bio or "",
-                followers=result.creator.followers,
-                recent_posts=result.recentPosts,
-                category=getattr(result.aiEnrichment, "category", "") or "",
-                niche=getattr(result.aiEnrichment, "niche", "") or "",
-                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
+        # 🛡️ GUARD 2: POST-CRAWL VALIDATION GUARD
+        post_val = validate_post_crawl(result, is_refresh=is_refresh)
+        if not post_val.is_valid:
+            logger.warning(
+                f"[WORKER] QUARANTINE {plat} @{clean_user}: Không đạt Post-Validation Guard "
+                f"(Lý do: {post_val.quarantine_reason}, Chi tiết: {post_val.details})"
             )
-            if result.aiEnrichment:
-                result.aiEnrichment.creatorType = smart_type
+            staging_repo.update_status_and_decision(
+                platform=plat,
+                username=clean_user,
+                status=ProcessingStatus.FAILED,
+                decision=Decision.AUTO_REJECT,
+                reason_codes=[post_val.quarantine_reason or "QUARANTINE_POST_VALIDATION_FAILED"],
+            )
+            return {
+                "status": "QUARANTINE_REJECTED",
+                "reason": post_val.quarantine_reason,
+                "details": post_val.details,
+                "username": clean_user,
+            }
 
-            creator_type = smart_type
+        # Chạy AI Enrichment & Phân loại Creator Type
+        result.aiEnrichment = process_ai_enrichment(result.creator, result.recentPosts)
 
-            # Chốt chặn nghiêm ngặt: Chỉ gửi KOL/KOC sang Java Backend
-            if creator_type not in ["KOL", "KOC"]:
-                logger.warning(
-                    f"[WORKER] SKIP INGEST @{clean_user}: Bỏ qua vì không phải KOL/KOC (Phân loại: {creator_type})."
-                )
-                staging_repo.update_status_and_decision(
-                    platform="TIKTOK",
-                    username=clean_user,
-                    status=ProcessingStatus.FAILED,
-                    decision=Decision.AUTO_REJECT,
-                    primary_type=creator_type,
-                    reason_codes=["POST_VALIDATION_NOT_KOC_KOL"],
-                )
-                return result.model_dump(mode="json")
+        with open("data/crawled_results.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(result.model_dump(mode="json"), ensure_ascii=False) + "\n")
 
-            java_payload = JavaMapper.from_ingest_payload(result)
+        smart_type = classify_creator_type_smart(
+            username=result.creator.username,
+            display_name=result.creator.displayName,
+            bio=result.creator.bio or "",
+            followers=result.creator.followers,
+            recent_posts=result.recentPosts,
+            category=getattr(result.aiEnrichment, "category", "") or "",
+            niche=getattr(result.aiEnrichment, "niche", "") or "",
+            classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
+        )
+        if result.aiEnrichment:
+            result.aiEnrichment.creatorType = smart_type
 
-            with open("data/java_payloads_debug.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(java_payload, ensure_ascii=False) + "\n")
-
-            sent_ok = java_client.send_creator_data(java_payload)
-            if sent_ok:
-                staging_repo.update_status_and_decision(
-                    platform="TIKTOK",
-                    username=clean_user,
-                    status=ProcessingStatus.INGESTED,
-                )
-
+        # 🛡️ GUARD 3: Chỉ gửi KOL/KOC sang Java Backend
+        if smart_type not in VALID_CREATOR_TYPES:
+            logger.warning(
+                f"[WORKER] SKIP INGEST {plat} @{clean_user}: Bỏ qua vì không phải KOL/KOC (Phân loại: {smart_type})."
+            )
+            staging_repo.update_status_and_decision(
+                platform=plat,
+                username=clean_user,
+                status=ProcessingStatus.FAILED,
+                decision=Decision.AUTO_REJECT,
+                primary_type=smart_type,
+                reason_codes=["POST_VALIDATION_NOT_KOC_KOL"],
+            )
             return result.model_dump(mode="json")
-        else:
-            logger.warning(f"[WORKER] FAILED: Could not crawl @{clean_user}. Retrying...")
-            raise self.retry(countdown=180)
+
+        java_payload = JavaMapper.from_ingest_payload(result)
+        with open("data/java_payloads_debug.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(java_payload, ensure_ascii=False) + "\n")
+
+        sent_ok = java_client.send_creator_data(java_payload)
+        staging_repo.update_status_and_decision(
+            platform=plat,
+            username=clean_user,
+            status=ProcessingStatus.INGESTED if sent_ok else ProcessingStatus.FAILED,
+            primary_type=smart_type,
+        )
+        return result.model_dump(mode="json")
+
     except Exception as e:
-        logger.error(f"[WORKER] ERROR processing @{clean_user}: {e}")
-        raise self.retry(exc=e, countdown=180)
+        logger.error(f"[WORKER] ERROR processing {plat} @{clean_user}: {e}")
+        staging_repo.update_status_and_decision(
+            platform=plat,
+            username=clean_user,
+            status=ProcessingStatus.FAILED,
+        )
+        raise task_self.retry(exc=e, countdown=retry_countdown)
+
+
+@app.task(bind=True, max_retries=3, queue="deep_crawl_queue")
+def process_tiktok_profile(self, username: str, is_refresh: bool = False) -> Optional[dict]:
+    return _execute_deep_crawl(self, "TIKTOK", username, _crawl_tiktok_profile_sync, is_refresh, 180)
 
 
 @app.task(bind=True, max_retries=3, queue="deep_crawl_queue")
 def process_facebook_profile(self, username: str, is_refresh: bool = False) -> Optional[dict]:
-    clean_user = username.removeprefix("@").strip()
-    logger.info(f"[WORKER] Starting Facebook crawl check for: {clean_user}")
-
-    # 🛡️ CELERY DEEP CRAWL GATE (Double-Check Guard)
-    staging_record = staging_repo.get_candidate("FACEBOOK", clean_user)
-    is_authorized = (
-        is_refresh
-        or (
-            staging_record is not None
-            and staging_record.decision in [
-                Decision.AUTO_ACCEPT_KOC,
-                Decision.AUTO_ACCEPT_KOL,
-                Decision.MANAGER_APPROVED,
-            ]
-        )
-    )
-    if not is_authorized:
-        logger.error(
-            f"[DEEP CRAWL GATE BLOCKED] Từ chối Deep Crawl FB {clean_user}: "
-            f"Chưa qua Preflight hoặc chưa được duyệt!"
-        )
-        return {
-            "status": "BLOCKED",
-            "reason": "UNAUTHORIZED_DEEP_CRAWL",
-            "username": clean_user,
-        }
-
-    staging_repo.update_status_and_decision(
-        platform="FACEBOOK",
-        username=clean_user,
-        status=ProcessingStatus.DEEP_CRAWLING,
-    )
-
-    try:
-        result = _crawl_facebook_profile_sync(clean_user)
-
-        if result:
-            # 🛡️ POST-CRAWL VALIDATION GUARD
-            post_val = validate_post_crawl(result, is_refresh=is_refresh)
-            if not post_val.is_valid:
-                logger.warning(
-                    f"[WORKER] QUARANTINE FB {clean_user}: Không đạt Post-Validation Guard "
-                    f"(Lý do: {post_val.quarantine_reason}, Chi tiết: {post_val.details})"
-                )
-                staging_repo.update_status_and_decision(
-                    platform="FACEBOOK",
-                    username=clean_user,
-                    status=ProcessingStatus.FAILED,
-                    decision=Decision.AUTO_REJECT,
-                    reason_codes=[post_val.quarantine_reason or "QUARANTINE_POST_VALIDATION_FAILED"],
-                )
-                return {
-                    "status": "QUARANTINE_REJECTED",
-                    "reason": post_val.quarantine_reason,
-                    "details": post_val.details,
-                    "username": clean_user,
-                }
-
-            result.aiEnrichment = process_ai_enrichment(
-                result.creator, result.recentPosts
-            )
-
-            with open("data/crawled_results.jsonl", "a", encoding="utf-8") as f:
-                f.write(
-                    json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
-                    + "\n"
-                )
-
-            smart_type = classify_creator_type_smart(
-                username=result.creator.username,
-                display_name=result.creator.displayName,
-                bio=result.creator.bio or "",
-                followers=result.creator.followers,
-                recent_posts=result.recentPosts,
-                category=getattr(result.aiEnrichment, "category", "") or "",
-                niche=getattr(result.aiEnrichment, "niche", "") or "",
-                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
-            )
-            if result.aiEnrichment:
-                result.aiEnrichment.creatorType = smart_type
-
-            creator_type = smart_type
-
-            if creator_type not in ["KOL", "KOC"]:
-                logger.warning(
-                    f"[WORKER] SKIP INGEST FB {clean_user}: Bỏ qua vì không phải KOL/KOC."
-                )
-                staging_repo.update_status_and_decision(
-                    platform="FACEBOOK",
-                    username=clean_user,
-                    status=ProcessingStatus.FAILED,
-                    decision=Decision.AUTO_REJECT,
-                )
-                return result.model_dump(mode="json")
-
-            java_payload = JavaMapper.from_ingest_payload(result)
-
-            with open("data/java_payloads_debug.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(java_payload, ensure_ascii=False) + "\n")
-
-            sent_ok = java_client.send_creator_data(java_payload)
-            if sent_ok:
-                staging_repo.update_status_and_decision(
-                    platform="FACEBOOK",
-                    username=clean_user,
-                    status=ProcessingStatus.INGESTED,
-                )
-
-            return result.model_dump(mode="json")
-        else:
-            logger.warning(f"[WORKER] FAILED: Could not crawl Facebook {clean_user}. Retrying...")
-            raise self.retry(countdown=10)
-    except Exception as e:
-        logger.error(f"[WORKER] ERROR processing Facebook {clean_user}: {e}")
-        raise self.retry(exc=e, countdown=10)
+    return _execute_deep_crawl(self, "FACEBOOK", username, _crawl_facebook_profile_sync, is_refresh, 10)
 
 
 @app.task(bind=True, max_retries=3, queue="deep_crawl_queue")
 def process_instagram_profile(self, username: str, is_refresh: bool = False) -> Optional[dict]:
-    clean_user = username.removeprefix("@").strip()
-    logger.info(f"[WORKER] Starting Instagram crawl check for: @{clean_user}")
-
-    # 🛡️ CELERY DEEP CRAWL GATE (Double-Check Guard)
-    staging_record = staging_repo.get_candidate("INSTAGRAM", clean_user)
-    is_authorized = (
-        is_refresh
-        or (
-            staging_record is not None
-            and staging_record.decision in [
-                Decision.AUTO_ACCEPT_KOC,
-                Decision.AUTO_ACCEPT_KOL,
-                Decision.MANAGER_APPROVED,
-            ]
-        )
-    )
-    if not is_authorized:
-        logger.error(
-            f"[DEEP CRAWL GATE BLOCKED] Từ chối Deep Crawl IG @{clean_user}: "
-            f"Chưa qua Preflight hoặc chưa được duyệt!"
-        )
-        return {
-            "status": "BLOCKED",
-            "reason": "UNAUTHORIZED_DEEP_CRAWL",
-            "username": clean_user,
-        }
-
-    staging_repo.update_status_and_decision(
-        platform="INSTAGRAM",
-        username=clean_user,
-        status=ProcessingStatus.DEEP_CRAWLING,
-    )
-
-    try:
-        result = _crawl_instagram_profile_sync(clean_user)
-
-        if result:
-            # 🛡️ POST-CRAWL VALIDATION GUARD
-            post_val = validate_post_crawl(result, is_refresh=is_refresh)
-            if not post_val.is_valid:
-                logger.warning(
-                    f"[WORKER] QUARANTINE IG @{clean_user}: Không đạt Post-Validation Guard "
-                    f"(Lý do: {post_val.quarantine_reason}, Chi tiết: {post_val.details})"
-                )
-                staging_repo.update_status_and_decision(
-                    platform="INSTAGRAM",
-                    username=clean_user,
-                    status=ProcessingStatus.FAILED,
-                    decision=Decision.AUTO_REJECT,
-                    reason_codes=[post_val.quarantine_reason or "QUARANTINE_POST_VALIDATION_FAILED"],
-                )
-                return {
-                    "status": "QUARANTINE_REJECTED",
-                    "reason": post_val.quarantine_reason,
-                    "details": post_val.details,
-                    "username": clean_user,
-                }
-
-            result.aiEnrichment = process_ai_enrichment(
-                result.creator, result.recentPosts
-            )
-
-            with open("data/crawled_results.jsonl", "a", encoding="utf-8") as f:
-                f.write(
-                    json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
-                    + "\n"
-                )
-
-            smart_type = classify_creator_type_smart(
-                username=result.creator.username,
-                display_name=result.creator.displayName,
-                bio=result.creator.bio or "",
-                followers=result.creator.followers,
-                recent_posts=result.recentPosts,
-                category=getattr(result.aiEnrichment, "category", "") or "",
-                niche=getattr(result.aiEnrichment, "niche", "") or "",
-                classified_type=getattr(result.aiEnrichment, "creatorType", "") or "",
-            )
-            if result.aiEnrichment:
-                result.aiEnrichment.creatorType = smart_type
-
-            creator_type = smart_type
-
-            if creator_type not in ["KOL", "KOC"]:
-                logger.warning(
-                    f"[WORKER] SKIP INGEST IG @{clean_user}: Bỏ qua vì không phải KOL/KOC."
-                )
-                staging_repo.update_status_and_decision(
-                    platform="INSTAGRAM",
-                    username=clean_user,
-                    status=ProcessingStatus.FAILED,
-                    decision=Decision.AUTO_REJECT,
-                )
-                return result.model_dump(mode="json")
-
-            java_payload = JavaMapper.from_ingest_payload(result)
-
-            with open("data/java_payloads_debug.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(java_payload, ensure_ascii=False) + "\n")
-
-            sent_ok = java_client.send_creator_data(java_payload)
-            if sent_ok:
-                staging_repo.update_status_and_decision(
-                    platform="INSTAGRAM",
-                    username=clean_user,
-                    status=ProcessingStatus.INGESTED,
-                )
-
-            return result.model_dump(mode="json")
-        else:
-            logger.warning(f"[WORKER] FAILED: Could not crawl Instagram @{clean_user}. Retrying...")
-            raise self.retry(countdown=10)
-    except Exception as e:
-        logger.error(f"[WORKER] ERROR processing Instagram @{clean_user}: {e}")
-        raise self.retry(exc=e, countdown=10)
+    return _execute_deep_crawl(self, "INSTAGRAM", username, _crawl_instagram_profile_sync, is_refresh, 10)
 
 
 @app.task(bind=True)
@@ -462,7 +279,7 @@ def run_retrain_pipeline(self) -> None:
 
 
 # ==============================================================================
-# PHA 3: TỰ ĐỘNG CÀO KOC MỚI ĐỊNH KỲ HÀNG TUẦN (WEEKLY DISCOVERY OF NEW KOCS)
+# PHA 3: TỰ ĐỘNG CÀO KOC MỚI ĐỊNH KỲ (DISCOVERY OF NEW KOCS)
 # ==============================================================================
 DISCOVERY_KEYWORDS_VI = [
     "review mỹ phẩm",
@@ -473,6 +290,39 @@ DISCOVERY_KEYWORDS_VI = [
     "review du lịch",
 ]
 
+_PLATFORM_EXPAND_MAP = {
+    "ALL": ("TIKTOK", "FACEBOOK", "INSTAGRAM"),
+    "BOTH": ("TIKTOK", "FACEBOOK", "INSTAGRAM"),
+    "TIKTOK": ("TIKTOK",),
+    "FACEBOOK": ("FACEBOOK",),
+    "INSTAGRAM": ("INSTAGRAM",),
+}
+
+
+def _load_target_keywords(custom_keywords: Optional[list[str]]) -> list[str]:
+    cleaned = [k.strip() for k in (custom_keywords or []) if k and k.strip()]
+    if cleaned:
+        return cleaned
+    try:
+        conn = _get_pg_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT keyword FROM discovery_keyword WHERE is_active = true AND keyword_type = 'TARGET'"
+        )
+        rows = cur.fetchall()
+        conn.close()
+        db_keywords = [r[0].strip() for r in rows if r[0] and r[0].strip()]
+        if db_keywords:
+            logger.info(
+                f"[WEEKLY DISCOVERY] Đã nạp {len(db_keywords)} từ khóa TARGET từ PostgreSQL: {db_keywords}"
+            )
+            return db_keywords
+    except Exception as db_err:
+        logger.debug(f"[WEEKLY DISCOVERY] Không lấy được từ khóa từ DB ({db_err}), sử dụng mặc định.")
+
+    logger.info(f"[WEEKLY DISCOVERY] Sử dụng bộ từ khóa mặc định: {DISCOVERY_KEYWORDS_VI}")
+    return DISCOVERY_KEYWORDS_VI
+
 
 @app.task(bind=True, queue="default")
 def weekly_discover_new_creators_task(
@@ -482,13 +332,11 @@ def weekly_discover_new_creators_task(
     platform: str = "ALL",
 ) -> dict:
     """
-    Task chạy định kỳ hàng tuần trên Celery Beat hoặc do Manager kích hoạt:
+    Task chạy định kỳ trên Celery Beat hoặc do Manager kích hoạt:
     - Quét tìm kiếm ứng viên trên các chuyên mục ngành nghề phổ biến hoặc từ khóa tùy chỉnh.
-    - Hỗ trợ đa nền tảng: TIKTOK, FACEBOOK hoặc ALL (quét cả 2).
+    - Hỗ trợ đa nền tảng: TIKTOK, FACEBOOK hoặc ALL (cô lập lỗi từng nền tảng để không mất dữ liệu).
     - Tự động lấy từ khóa TARGET đang active trong DB nếu không truyền trực tiếp.
     - LOẠI BỎ 100% KOC CŨ ĐÃ CÓ TRONG HỆ THỐNG (Chỉ chọn KOC mới toanh).
-    - Đưa KOC mới vào hàng đợi Preflight để lọc tự động (Rule Engine BR-01 -> BR-06)
-      và Deep Crawl nếu đạt chuẩn.
     """
     target_platform = (platform or "ALL").strip().upper()
     logger.info(
@@ -497,64 +345,37 @@ def weekly_discover_new_creators_task(
     try:
         from app.crawlers.discovery_crawler import (
             search_new_facebook_candidates,
+            search_new_instagram_candidates,
             search_new_tiktok_candidates,
         )
 
-        search_keywords = [k.strip() for k in keywords if k and k.strip()] if keywords else []
-        if not search_keywords:
-            try:
-                import psycopg2
-
-                db_host = os.environ.get("DB_HOST", "221.121.3.226")
-                db_user = os.environ.get("DB_USER", "influencermatch_user")
-                db_pass = os.environ.get("DB_PASSWORD", "12345")
-                db_name = os.environ.get("DB_NAME", "influencermatch_dev")
-
-                conn = psycopg2.connect(
-                    host=db_host,
-                    user=db_user,
-                    password=db_pass,
-                    dbname=db_name,
-                    connect_timeout=5,
-                )
-                cur = conn.cursor()
-                cur.execute(
-                    "SELECT keyword FROM discovery_keyword WHERE is_active = true AND keyword_type = 'TARGET'"
-                )
-                rows = cur.fetchall()
-                conn.close()
-                db_keywords = [r[0].strip() for r in rows if r[0] and r[0].strip()]
-                if db_keywords:
-                    search_keywords = db_keywords
-                    logger.info(
-                        f"[WEEKLY DISCOVERY] Đã nạp {len(search_keywords)} từ khóa TARGET từ PostgreSQL: {search_keywords}"
-                    )
-            except Exception as db_err:
-                logger.debug(f"[WEEKLY DISCOVERY] Không lấy được từ khóa từ DB ({db_err}), sử dụng mặc định.")
-
-        if not search_keywords:
-            search_keywords = DISCOVERY_KEYWORDS_VI
-            logger.info(f"[WEEKLY DISCOVERY] Sử dụng bộ từ khóa mặc định: {search_keywords}")
+        search_keywords = _load_target_keywords(keywords)
+        discovery_runners = {
+            "TIKTOK": search_new_tiktok_candidates,
+            "FACEBOOK": search_new_facebook_candidates,
+            "INSTAGRAM": search_new_instagram_candidates,
+        }
+        selected_platforms = _PLATFORM_EXPAND_MAP.get(target_platform, ())
 
         candidates: list[dict] = []
+        platform_errors: dict[str, str] = {}
 
-        # 1. Quét TikTok nếu yêu cầu TIKTOK hoặc ALL/BOTH
-        if target_platform in ["ALL", "BOTH", "TIKTOK"]:
-            tiktok_candidates = search_new_tiktok_candidates(
-                keywords=search_keywords,
-                max_per_keyword=8,
-                max_total=max_new_kocs * 2,  # Quét rộng để trừ hao các KOC cũ
-            )
-            candidates.extend(tiktok_candidates)
-
-        # 2. Quét Facebook nếu yêu cầu FACEBOOK hoặc ALL/BOTH
-        if target_platform in ["ALL", "BOTH", "FACEBOOK"]:
-            fb_candidates = search_new_facebook_candidates(
-                keywords=search_keywords,
-                max_per_keyword=8,
-                max_total=max_new_kocs * 2,
-            )
-            candidates.extend(fb_candidates)
+        for plat_name in selected_platforms:
+            runner_fn = discovery_runners.get(plat_name)
+            if not runner_fn:
+                continue
+            try:
+                found = runner_fn(
+                    keywords=search_keywords,
+                    max_per_keyword=8,
+                    max_total=max_new_kocs * 2,
+                )
+                candidates.extend(found)
+            except Exception as plat_err:
+                platform_errors[plat_name] = str(plat_err)
+                logger.warning(
+                    f"[WEEKLY DISCOVERY] Nền tảng {plat_name} gặp lỗi khi tìm kiếm (vẫn tiếp tục nền tảng khác): {plat_err}"
+                )
 
         new_enqueued = 0
         skipped_old = 0
@@ -564,21 +385,15 @@ def weekly_discover_new_creators_task(
                 break
 
             cand_platform = cand.get("platform", "TIKTOK").upper()
-            username = cand.get("username", "").strip()
-            clean_user = username.removeprefix("@").strip().lower()
-
+            clean_user = cand.get("username", "").strip().removeprefix("@").strip().lower()
             if not clean_user:
                 continue
 
-            # 🚨 KIỂM TRA CHỐNG CÀO KOC CŨ:
-            # Nếu username đã có trong staging database -> Bỏ qua tuyệt đối!
-            existing = staging_repo.get_candidate(cand_platform, clean_user)
-            if existing is not None:
+            if staging_repo.get_candidate(cand_platform, clean_user) is not None:
                 skipped_old += 1
                 logger.debug(f"[WEEKLY DISCOVERY] Bỏ qua KOC CŨ: {cand_platform} @{clean_user} (đã có trong DB)")
                 continue
 
-            # Đây là KOC HOÀN TOÀN MỚI -> Đưa vào hàng đợi Preflight Task
             preflight_candidate_task.delay(cand_platform, clean_user)
             new_enqueued += 1
             logger.info(
@@ -591,68 +406,71 @@ def weekly_discover_new_creators_task(
             "total_candidates_scanned": len(candidates),
             "new_kocs_enqueued": new_enqueued,
             "old_kocs_skipped": skipped_old,
+            "platform_errors": platform_errors,
         }
-        logger.info(f"[WEEKLY DISCOVERY] Hoàn tất luồng tự động hàng tuần: {summary}")
+        logger.info(f"[WEEKLY DISCOVERY] Hoàn tất luồng tự động: {summary}")
         return summary
     except Exception as e:
-        logger.error(f"[WEEKLY DISCOVERY] Lỗi khi cào KOC mới tự động hàng tuần: {e}")
+        logger.error(f"[WEEKLY DISCOVERY] Lỗi khi cào KOC mới tự động: {e}")
         return {"status": "FAILED", "error": str(e)}
 
 
 # ==============================================================================
 # PHA 4: TỰ ĐỘNG CÀO LẠI (REFRESH) CÁC KOC CŨ ĐÃ CÓ TRONG DATABASE
 # ==============================================================================
+def _fetch_stale_targets_from_pg(limit: int) -> list[dict]:
+    """Lấy danh sách Creator cũ nhất từ PostgreSQL, loại bỏ các tài khoản vừa lỗi gần đây để chống lặp vô tận."""
+    targets: list[dict] = []
+    try:
+        conn = _get_pg_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT c.platform, c.user_name
+            FROM creator c
+            LEFT JOIN public_creator_metric m ON c.id = m.creator_id
+            ORDER BY m.observed_at ASC NULLS FIRST
+            LIMIT %s;
+            """,
+            (max(limit * 4, limit),),
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        for plat_raw, uname_raw in rows:
+            if not uname_raw:
+                continue
+            plat = str(plat_raw or "TIKTOK").upper().strip()
+            uname = str(uname_raw).strip().removeprefix("@").strip()
+            if uname and staging_repo.is_eligible_for_refresh(plat, uname):
+                targets.append({"platform": plat, "username": uname})
+                if len(targets) >= limit:
+                    break
+        logger.info(f"[AUTO REFRESH DB] Đã lấy {len(targets)} KOC cũ hợp lệ từ PostgreSQL Deploy.")
+    except Exception as pg_err:
+        logger.debug(f"[AUTO REFRESH DB] Không kết nối được PostgreSQL ({pg_err}), chuyển sang Staging SQLite.")
+    return targets
+
+
 @app.task(bind=True, queue="default")
 def auto_refresh_creators_in_db_task(self, limit: int = 25) -> dict:
     """
     Task chạy định kỳ tự động:
     - Lấy danh sách các Creator cũ ĐÃ CÓ TRONG DATABASE có ngày cập nhật cũ nhất.
-    - Kích hoạt luồng cào làm mới (is_refresh=True) để lấy số follower, view, like mới
-      và tính lại dataConfidence (hồi phục độ tươi freshness về 1.00).
-    - Cập nhật trực tiếp (Upsert) vào hồ sơ KOC hiện có, KHÔNG tạo bản ghi mới.
+    - Loại trừ các tài khoản hỏng/private vừa thử cào thất bại gần đây (cooldown 72h) để xoay vòng mượt.
+    - Đẩy thẳng vào Deep Crawl Queue với cờ is_refresh=True (không tốn bước Preflight thừa).
     """
     logger.info(f"[AUTO REFRESH DB] Bắt đầu quét cào lại các KOC cũ trong DB (Giới hạn: {limit} KOC)...")
     try:
-        targets: list[dict] = []
+        targets = _fetch_stale_targets_from_pg(limit)
 
-        # 1. Thử lấy từ PostgreSQL Database nếu có cấu hình kết nối
-        try:
-            import psycopg2
-
-            db_host = os.environ.get("DB_HOST", "221.121.3.226")
-            db_user = os.environ.get("DB_USER", "influencermatch_user")
-            db_pass = os.environ.get("DB_PASSWORD", "12345")
-            db_name = os.environ.get("DB_NAME", "influencermatch_dev")
-
-            conn = psycopg2.connect(
-                host=db_host,
-                user=db_user,
-                password=db_pass,
-                dbname=db_name,
-                connect_timeout=5,
-            )
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT c.platform, c.user_name
-                FROM creator c
-                LEFT JOIN public_creator_metric m ON c.id = m.creator_id
-                ORDER BY m.observed_at ASC NULLS FIRST
-                LIMIT %s;
-            """, (limit,))
-            rows = cur.fetchall()
-            for r in rows:
-                if r[1]:
-                    targets.append({"platform": str(r[0]).upper(), "username": str(r[1]).strip()})
-            conn.close()
-            logger.info(f"[AUTO REFRESH DB] Đã lấy {len(targets)} KOC cũ từ PostgreSQL Deploy.")
-        except Exception as pg_err:
-            logger.debug(f"[AUTO REFRESH DB] Không kết nối được PostgreSQL ({pg_err}), chuyển sang Staging SQLite.")
-
-        # 2. Nếu không lấy được từ PostgreSQL, lấy từ Staging SQLite
         if not targets:
             stale_records = staging_repo.get_stale_ingested_candidates(limit=limit)
-            for rec in stale_records:
-                targets.append({"platform": rec.platform.upper(), "username": rec.username.strip()})
+            targets = [
+                {"platform": rec.platform.upper(), "username": rec.username.strip()}
+                for rec in stale_records
+                if staging_repo.is_eligible_for_refresh(rec.platform.upper(), rec.username.strip())
+            ]
             logger.info(f"[AUTO REFRESH DB] Đã lấy {len(targets)} KOC cũ từ Staging SQLite.")
 
         if not targets:
@@ -663,13 +481,16 @@ def auto_refresh_creators_in_db_task(self, limit: int = 25) -> dict:
         for item in targets:
             plat = item["platform"]
             uname = item["username"].removeprefix("@").strip()
-            if not uname:
+            task_fn = _get_deep_crawl_task(plat)
+            if not uname or not task_fn:
                 continue
 
-            # Kích hoạt cào làm mới với cờ is_refresh=True
-            preflight_candidate_task.delay(plat, uname, is_refresh=True)
+            # Đẩy trực tiếp vào Deep Crawl với is_refresh=True để tiết kiệm 50% thời gian queue
+            task_fn.apply_async(args=[uname, True], queue="deep_crawl_queue")
             enqueued_count += 1
-            logger.info(f"[AUTO REFRESH DB ENQUEUE] Đã xếp hàng cào lại ({enqueued_count}/{len(targets)}): {plat} @{uname}")
+            logger.info(
+                f"[AUTO REFRESH DB ENQUEUE] Đã xếp hàng Deep Crawl làm mới ({enqueued_count}/{len(targets)}): {plat} @{uname}"
+            )
 
         return {
             "status": "COMPLETED",

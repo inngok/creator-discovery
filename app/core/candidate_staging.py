@@ -261,6 +261,33 @@ class CandidateStagingRepository:
             rows = cursor.fetchall()
             return [self._row_to_record(r) for r in rows]
 
+    def is_eligible_for_refresh(
+        self, platform: str, username: str, cooldown_hours: int = 72
+    ) -> bool:
+        """
+        Chống kẹt vòng lặp Refresh vô tận cho các tài khoản lỗi/private/quarantine:
+        - Nếu đang ở trạng thái đang xử lý -> Bỏ qua.
+        - Nếu vừa thử cào lại nhưng FAILED trong vòng cooldown_hours -> Bỏ qua để xoay vòng sang KOC khác.
+        """
+        from datetime import timedelta
+
+        rec = self.get_candidate(platform.upper(), username)
+        if not rec:
+            return True
+        if rec.processing_status in {
+            ProcessingStatus.PREFLIGHT_RUNNING,
+            ProcessingStatus.DEEP_CRAWL_QUEUED,
+            ProcessingStatus.DEEP_CRAWLING,
+        }:
+            return False
+        if rec.processing_status != ProcessingStatus.FAILED or not rec.updated_at:
+            return True
+        try:
+            updated_dt = datetime.fromisoformat(rec.updated_at.replace("Z", "+00:00"))
+            return (datetime.now(UTC) - updated_dt) >= timedelta(hours=cooldown_hours)
+        except ValueError:
+            return True
+
     def get_candidate_by_external_id(
         self, platform: str, external_id: str
     ) -> CandidateStagingRecord | None:

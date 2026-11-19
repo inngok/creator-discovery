@@ -4,6 +4,8 @@ import time
 import unittest
 from io import StringIO
 
+os.environ["TESTING"] = "1"
+
 sys.path.insert(0, os.path.abspath("."))
 
 from tests.test_rule_engine import TestRuleEngine

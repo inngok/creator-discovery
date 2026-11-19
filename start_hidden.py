@@ -15,6 +15,17 @@ commands = [
         "--loglevel=info",
         "--pool=threads",
         "--concurrency=1",
+        "-Q",
+        "preflight_queue,deep_crawl_queue,default,celery",
+    ],
+    [
+        "venv\\Scripts\\celery.exe",
+        "-A",
+        "app.workers.celery_app",
+        "beat",
+        "--loglevel=info",
+        "-s",
+        "data/celerybeat-schedule",
     ],
 ]
 

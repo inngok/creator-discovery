@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+.git/
+.gitignore
+.idea/
+data/
+app/ai/data/
+app/ai_development/data/
+chrome_profile/
+server.log
+service_pids.txt
+ai_result.json
+tests/

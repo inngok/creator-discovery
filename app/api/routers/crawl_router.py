@@ -8,6 +8,7 @@ from app.crawlers.facebook_crawler import crawl_facebook_profile
 from app.crawlers.instagram_crawler import crawl_instagram_profile
 from app.crawlers.tiktok_crawler import crawl_tiktok_profile
 from app.services.preflight_service import PreflightService
+from app.core.logger import setup_logger
 from app.workers.tasks import (
     preflight_candidate_task,
     process_facebook_profile,
@@ -16,6 +17,7 @@ from app.workers.tasks import (
 )
 
 router = APIRouter(prefix="/api/v1/crawl", tags=["Crawl"])
+logger = setup_logger("crawl_router")
 
 
 DEEP_CRAWL_TASKS = {
@@ -26,9 +28,12 @@ DEEP_CRAWL_TASKS = {
 
 
 def is_redis_available() -> bool:
+    from urllib.parse import urlparse
+    import os
     import socket
+    broker = urlparse(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
     try:
-        with socket.create_connection(("127.0.0.1", 6379), timeout=0.2):
+        with socket.create_connection((broker.hostname or "localhost", broker.port or 6379), timeout=0.5):
             return True
     except (socket.timeout, ConnectionRefusedError, OSError):
         return False
@@ -47,6 +52,16 @@ def _dispatch_enqueue(platform: str, username: str, force_deep_crawl: bool = Fal
             status_code=400,
             detail=f"Nền tảng {plat} không được hỗ trợ. Vui lòng chọn: {supported}",
         )
+
+    from app.core.candidate_staging import staging_repo
+    from app.ai.rules.rule_config import Decision
+    existing = staging_repo.get_candidate(plat, clean_user)
+    if existing and existing.decision == Decision.MANAGER_REJECTED:
+        raise HTTPException(status_code=409, detail="Hồ sơ đã bị chuyên viên từ chối; không thể tự động đưa lại vào hàng đợi.")
+    if force_deep_crawl and (not existing or existing.decision not in (
+        Decision.AUTO_ACCEPT_KOC, Decision.AUTO_ACCEPT_KOL, Decision.MANAGER_APPROVED
+    )):
+        raise HTTPException(status_code=409, detail="Hồ sơ chưa đủ điều kiện cào sâu. Cần phân loại và kiểm định trước.")
 
     if is_redis_available():
         try:
@@ -71,31 +86,10 @@ def _dispatch_enqueue(platform: str, username: str, force_deep_crawl: bool = Fal
                 "message": f"Đã đưa {clean_user} ({plat}) vào Preflight Gate để phân loại trước khi cào sâu.",
             }
         except Exception as e:
-            logger.warning(f"[ENQUEUE] Celery/Redis lỗi ({e}), chuyển sang chế độ lưu trực tiếp.")
+            logger.warning(f"[ENQUEUE] Không thể đưa tác vụ vào hàng đợi: {e}")
+            raise HTTPException(status_code=503, detail="Không thể đưa tác vụ vào hàng đợi. Vui lòng thử lại sau.") from e
 
-    from app.core.candidate_staging import CandidateStagingRecord, staging_repo
-    from app.ai.rules.rule_config import ProcessingStatus, Decision
-    from datetime import datetime, UTC
-
-    rec = CandidateStagingRecord(
-        platform=plat,
-        external_id=clean_user,
-        username=clean_user,
-        display_name=clean_user,
-        profile_url=f"https://www.tiktok.com/@{clean_user}" if plat == "TIKTOK" else f"https://www.facebook.com/{clean_user}",
-        processing_status=ProcessingStatus.INGESTED,
-        decision=Decision.AUTO_ACCEPT_KOC,
-        primary_type="KOC",
-        last_checked_at=datetime.now(UTC).isoformat(),
-    )
-    staging_repo.upsert_candidate(rec)
-    return {
-        "status": "success",
-        "platform": plat,
-        "username": clean_user,
-        "mode": "LOCAL_STAGING",
-        "message": f"Đã lưu {clean_user} ({plat}) an toàn vào cơ sở dữ liệu hệ thống.",
-    }
+    raise HTTPException(status_code=503, detail="Hàng đợi cào dữ liệu chưa sẵn sàng. Chưa lưu hoặc tự duyệt hồ sơ.")
 
 
 class EnqueueCandidateRequest(BaseModel):
@@ -412,3 +406,22 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         "results": results,
         "metrics": metrics_tracker.get_metrics_summary(),
     }
+
+
+class SinglePostMetricsRequest(BaseModel):
+    post_url: str = Field(..., description="Đường link bài đăng cụ thể (TikTok, YouTube, Facebook, Instagram)")
+
+
+@router.post("/post-metrics", summary="Cào thông số bài đăng đơn lẻ để theo dõi Campaign (Views, Likes, Comments, Shares)")
+async def track_single_post_metrics(req: SinglePostMetricsRequest):
+    """
+    Nhận link bài đăng bất kỳ của chiến dịch:
+    - Bóc tách tức thì views, likes, comments, shares, caption, thumbnail, thời gian đăng.
+    - Giúp Brand theo dõi kết quả campaign tự động mà không cần nhập thủ công.
+    """
+    from app.services.single_post_tracker_service import single_post_tracker
+    res = await asyncio.to_thread(single_post_tracker.fetch_post_metrics, req.post_url)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+

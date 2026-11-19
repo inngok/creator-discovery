@@ -3,7 +3,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from app.ai.rules.rule_config import ProcessingStatus
+from app.ai.rules.rule_config import ProcessingStatus, Decision
 from app.ai.rules.rule_engine import RuleEngine
 from app.ai.rules.signal_extractor import PostPreview, ProfileMetadata
 from app.core.candidate_staging import CandidateStagingRecord, staging_repo
@@ -42,6 +42,9 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
     """
     platform_upper = (platform or "TIKTOK").upper()
     clean_user = clean_username_from_input(username_or_url, platform=platform_upper)
+    previous = staging_repo.get_candidate(platform_upper, clean_user)
+    if previous and previous.decision == Decision.MANAGER_REJECTED:
+        return {"status": "error", "error": "Hồ sơ đã bị chuyên viên từ chối. Không thể tự động cào lại để thay đổi quyết định.", "username": clean_user, "platform": platform_upper}
 
     start_time = time.time()
     logger.info(f"[LIVE CRAWL] Bắt đầu cào trực tiếp cho @{clean_user} ({platform_upper})...")

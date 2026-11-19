@@ -406,3 +406,22 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         "results": results,
         "metrics": metrics_tracker.get_metrics_summary(),
     }
+
+
+class SinglePostMetricsRequest(BaseModel):
+    post_url: str = Field(..., description="Đường link bài đăng cụ thể (TikTok, YouTube, Facebook, Instagram)")
+
+
+@router.post("/post-metrics", summary="Cào thông số bài đăng đơn lẻ để theo dõi Campaign (Views, Likes, Comments, Shares)")
+async def track_single_post_metrics(req: SinglePostMetricsRequest):
+    """
+    Nhận link bài đăng bất kỳ của chiến dịch:
+    - Bóc tách tức thì views, likes, comments, shares, caption, thumbnail, thời gian đăng.
+    - Giúp Brand theo dõi kết quả campaign tự động mà không cần nhập thủ công.
+    """
+    from app.services.single_post_tracker_service import single_post_tracker
+    res = await asyncio.to_thread(single_post_tracker.fetch_post_metrics, req.post_url)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import uuid
@@ -11,6 +12,7 @@ from app.core.candidate_staging import staging_repo
 from app.ai.rules.rule_config import Decision, ProcessingStatus
 from app.services.crawled_result_service import list_crawled_results, get_crawled_result_by_username
 from app.services.live_crawl_service import crawl_single_koc_live
+from app.services.audit_service import audit_service
 from app.core.logger import setup_logger
 from app.clients.java_client import java_client
 from app.mappers.java_mapper import JavaMapper
@@ -37,6 +39,15 @@ class ConflictResolveRequest(BaseModel):
     action: str = Field(..., description="'MERGE' hoặc 'SEPARATE'")
     masterProfileId: Optional[str] = ""
     note: Optional[str] = ""
+
+
+class BatchReclassifyRequest(BaseModel):
+    limit: int = Field(20, ge=1, le=100, description="Số lượng Creator kiểm duyệt trong đợt này (1 - 100)")
+    offset: int = Field(0, ge=0, description="Offset phân trang")
+    platform: Optional[str] = Field(None, description="Lọc theo nền tảng: TIKTOK, YOUTUBE, FACEBOOK, INSTAGRAM")
+    category: Optional[str] = Field(None, description="Lọc theo ngành hàng (vd: Beauty, Lifestyle, Fashion...)")
+    dry_run: bool = Field(False, description="Nếu True: chỉ đánh giá và thống kê, không ghi đè DB / gửi Java Backend")
+    auto_quarantine: bool = Field(True, description="Nếu True: tự động cô lập tài khoản Shop/Rác vào Staging")
 
 
 # Lưu trạng thái xử lý conflicts vào file JSON bền vững
@@ -328,3 +339,34 @@ async def resolve_identity_conflict(conflict_id: str, req: ConflictResolveReques
         "conflictId": conflict_id,
         "action": req.action,
     }
+
+
+@router.post("/batch-reclassify", summary="Thẩm định & tái phân loại Creator hàng loạt trong DB")
+async def batch_reclassify_creators(req: BatchReclassifyRequest) -> dict[str, Any]:
+    """
+    Quét theo đợt các Creator đang lưu trong Database (PostgreSQL hoặc Staging SQLite):
+    - Kiểm tra và sàng lọc rác: Shop bán hàng sỉ lẻ, reup/spam, tài khoản bị xóa.
+    - Phân loại lại thông minh: Phân định chính xác KOC vs KOL dựa trên video & tương tác.
+    - Tính lại điểm chất lượng (dataConfidence): nguồn, độ tươi, độ đầy đủ, tính hợp lý.
+    - Sinh lại vector nhúng BKAI 768 chiều.
+    - Đồng bộ sang Java Backend nếu dry_run=False.
+    """
+    return await asyncio.to_thread(
+        audit_service.audit_batch,
+        limit=req.limit,
+        offset=req.offset,
+        platform=req.platform,
+        category=req.category,
+        dry_run=req.dry_run,
+        auto_quarantine=req.auto_quarantine,
+    )
+
+
+@router.get("/audit-report", summary="Lấy báo cáo thẩm định DB gần nhất")
+async def get_latest_audit_report() -> dict[str, Any]:
+    """
+    Xem thống kê bao nhiêu % dữ liệu đạt chuẩn, bao nhiêu kênh rác bị phát hiện
+    từ đợt quét thẩm định gần nhất.
+    """
+    return audit_service.get_latest_report()
+

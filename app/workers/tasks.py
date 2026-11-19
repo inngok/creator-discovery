@@ -291,10 +291,11 @@ DISCOVERY_KEYWORDS_VI = [
 ]
 
 _PLATFORM_EXPAND_MAP = {
-    "ALL": ("TIKTOK", "FACEBOOK"),
-    "BOTH": ("TIKTOK", "FACEBOOK"),
+    "ALL": ("TIKTOK", "FACEBOOK", "INSTAGRAM"),
+    "BOTH": ("TIKTOK", "FACEBOOK", "INSTAGRAM"),
     "TIKTOK": ("TIKTOK",),
     "FACEBOOK": ("FACEBOOK",),
+    "INSTAGRAM": ("INSTAGRAM",),
 }
 
 
@@ -344,6 +345,7 @@ def weekly_discover_new_creators_task(
     try:
         from app.crawlers.discovery_crawler import (
             search_new_facebook_candidates,
+            search_new_instagram_candidates,
             search_new_tiktok_candidates,
         )
 
@@ -351,6 +353,7 @@ def weekly_discover_new_creators_task(
         discovery_runners = {
             "TIKTOK": search_new_tiktok_candidates,
             "FACEBOOK": search_new_facebook_candidates,
+            "INSTAGRAM": search_new_instagram_candidates,
         }
         selected_platforms = _PLATFORM_EXPAND_MAP.get(target_platform, ())
 

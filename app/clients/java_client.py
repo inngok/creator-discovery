@@ -13,9 +13,9 @@ logger = setup_logger("java_client")
 class JavaClient:
     def __init__(self):
         self.backend_url = os.environ.get(
-            "JAVA_BACKEND_URL", "http://localhost:8080/api/v1/creators/ingest"
+            "JAVA_BACKEND_URL", "https://api.influencermatch.site/api/v1/creators/ingest"
         )
-        self.secret_key = os.environ.get("JAVA_BACKEND_SECRET", "")
+        self.secret_key = os.environ.get("JAVA_BACKEND_SECRET", "secret-key-123")
 
     def send_creator_data(self, payload: dict) -> bool:
         payload = dict(payload)
@@ -26,7 +26,7 @@ class JavaClient:
                 self.backend_url,
                 json=payload,
                 headers={"X-Service-Key": self.secret_key},
-                timeout=15.0,
+                timeout=8.0,
             )
             if response.status_code not in [200, 201]:
                 logger.error(

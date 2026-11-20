@@ -1,0 +1,51 @@
+name: CI and VPS deploy
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.DEPLOY_ENABLED == 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', vars.DEPLOY_BRANCH || github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Deploy commit
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+          DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH }}
+          COMMIT: ${{ github.sha }}
+          DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH || github.event.repository.default_branch }}
+          API_SERVICE: ${{ vars.VPS_API_SERVICE }}
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?Missing VPS_HOST}" "${VPS_USER:?Missing VPS_USER}" "${DEPLOY_PATH:?Missing VPS_DEPLOY_PATH}"
+          : "${API_SERVICE:?Missing VPS_API_SERVICE}"
+          printf -v remote_command 'bash -s -- %q %q %q %q' "$DEPLOY_PATH" "$COMMIT" "$DEPLOY_BRANCH" "$API_SERVICE"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "$remote_command" < scripts/deploy.sh

@@ -105,8 +105,8 @@ class RuleEngine:
                     evidence=evidence.raw_metrics,
                 )
 
-            # Bio mơ hồ, không có từ khóa review / unboxing / chia sẻ và không có tick xanh -> SKIP_INSUFFICIENT
-            if not evidence.has_koc_review_bio and not (profile.is_verified or evidence.has_influence_signal or evidence.has_expertise_title):
+            # Bio mơ hồ, không có affiliate link, không có từ khóa review / unboxing / chia sẻ và không có tick xanh -> SKIP_INSUFFICIENT
+            if not (evidence.has_koc_review_bio or evidence.has_affiliate_link) and not (profile.is_verified or evidence.has_influence_signal or evidence.has_expertise_title):
                 reasons.append("BR08_INSUFFICIENT_DATA")
                 return RuleDecisionResult(
                     decision=Decision.SKIP_INSUFFICIENT,

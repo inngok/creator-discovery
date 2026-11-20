@@ -126,7 +126,9 @@ REGEX_KOC_OPINION = build_boundary_regex(KOC_OPINION_PHRASES)
 AFFILIATE_DOMAINS = [
     "beacons.ai", "linktr.ee", "shopee.vn", "bio.link",
     "instabio", "kol.eco", "mycollection.shop", "vt.tiktok.com",
-    "s.shopee.vn", "shorten.asia", "accesstrade.vn", "ecomobi.com"
+    "s.shopee.vn", "shorten.asia", "accesstrade.vn", "ecomobi.com",
+    "collshp.com", "passio.eco", "shope.ee", "kol.bio",
+    "atplink.com", "openinapp.co", "snipfeed.co", "taplink.cc"
 ]
 
 # 7. Danh xưng chuyên môn & chức danh (Expertise KOL)

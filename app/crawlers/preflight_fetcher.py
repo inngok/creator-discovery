@@ -69,8 +69,14 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
             except Exception:
                 pass
 
-            # Chờ tối đa 2.5s để API post/item_list kịp phản hồi
-            for _ in range(5):
+            # Cuộn xuống nhẹ để kích hoạt tải lazy video grid và gọi API post/item_list
+            try:
+                page.evaluate("window.scrollBy(0, 800);")
+            except Exception:
+                pass
+
+            # Chờ tối đa 3s để API post/item_list kịp phản hồi
+            for _ in range(6):
                 if captured_posts:
                     break
                 page.wait_for_timeout(500)
@@ -96,13 +102,14 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
 
     # Dự phòng bóc video trực tiếp từ DOM nếu API post/item_list chưa bắt được
     if not captured_posts:
-        for a in soup.select("a[href*='/video/']"):
+        for a in soup.select("a[href*='/video/'], a[href*='/photo/']"):
             href = a.get("href", "")
             text = a.get_text(strip=True)
             img = a.find("img")
             alt = img.get("alt", "") if img else ""
             desc = text or alt
-            pid = href.split("/video/")[-1].split("?")[0] if "/video/" in href else ""
+            pattern = "/video/" if "/video/" in href else "/photo/"
+            pid = href.split(pattern)[-1].split("?")[0] if pattern in href else ""
             if pid and not any(str(p.get("id")) == pid for p in captured_posts):
                 captured_posts.append({
                     "id": pid,

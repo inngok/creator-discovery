@@ -1,5 +1,7 @@
 # InfluencerMatch Crawler API
 
+CI/CD (GitHub Actions, VPS systemd): [docs/CI_CD.md](docs/CI_CD.md).
+
 Hệ thống tự động cào dữ liệu KOC/KOL từ đa nền tảng (**TikTok, Facebook, YouTube**), tích hợp **AI Enrichment** (phân loại Category, Niche, CreatorType, Summary, Topic) và tự động chuẩn hóa gửi dữ liệu sang Java Backend.
 
 ---

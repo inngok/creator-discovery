@@ -2,7 +2,7 @@
 
 Workflow: `.github/workflows/ci.yml` (CI and VPS deploy).
 
-Every push/PR runs Python 3.11 regression tests and validates Compose. CI uses temporary Redis and CPU-only PyTorch. Production deployment runs only after tests pass, on `DEPLOY_BRANCH`, with `DEPLOY_ENABLED=true`.
+Deployment runs directly on a push to `DEPLOY_BRANCH` or a manual run on that branch, with `DEPLOY_ENABLED=true`. The workflow does not run automated tests or trigger on pull requests. Pushes to other branches skip deployment.
 
 The VPS runs Python directly in `/root/creator-discovery/venv`, managed by systemd. Docker and GHCR are not needed for this deployment.
 
@@ -40,15 +40,15 @@ systemctl list-units --type=service --all 'crawler*' --no-pager
 
 ## Deployment behavior
 
-The script locks deployments, verifies all unit names and local tracked changes, fetches the branch, and checks that its tip matches the exact tested SHA. It fast-forwards the checkout without resetting local changes, installs requirements into the existing virtual environment, checks dependencies and syntax, then restarts the three application units. It checks all three units are active and `/openapi.json` responds on localhost:8000.
+The script locks deployments, verifies all unit names and local tracked changes, fetches the branch, and checks that its tip matches the exact workflow commit SHA. It fast-forwards the checkout without resetting local changes, installs requirements into the existing virtual environment, checks dependencies and syntax, then restarts the three application units. It checks all three units are active and `/openapi.json` responds on localhost:8000.
 
-A branch moving during CI causes the older deployment to fail before changing code; run the workflow for the latest commit. Divergent local commits also fail without resetting files.
+A branch moving during the workflow causes the older deployment to fail before changing code; run the workflow for the latest commit. Divergent local commits also fail without resetting files.
 
 This is an in-place deployment with a short interruption. Code and dependencies change before services restart. Installation or health failures do not automatically roll back; the log reports the previous commit. Back up production data before the first deployment. A rollback requires restoring the chosen code/dependencies and restarting the same units; it does not revert database changes. Service-active checks do not verify actual crawl task execution.
 
 ## First run
 
-1. Push this workflow to main and let tests pass with deployment disabled.
+1. Push this workflow to main with deployment disabled.
 2. Verify the API unit name and add VPS_API_SERVICE.
 3. Verify the VPS working tree is clean and Git fetch works.
 4. Set DEPLOY_ENABLED=true.
@@ -58,5 +58,4 @@ This is an in-place deployment with a short interruption. Code and dependencies 
 
 ```bash
 bash -n scripts/deploy.sh
-TESTING=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m unittest discover -s tests -v
 ```

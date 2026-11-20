@@ -2,7 +2,7 @@
 set -euo pipefail
 
 deploy_path="${1:?Missing deployment directory}"
-commit="${2:?Missing tested commit SHA}"
+commit="${2:?Missing deployment commit SHA}"
 branch="${3:?Missing deployment branch}"
 api_service="${4:?Missing API systemd service name}"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }

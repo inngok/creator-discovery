@@ -176,6 +176,20 @@ def fetch_raw_creator_profile(
             }
 
         unique_id = str(user_info.get("uniqueId", clean_user)).lstrip("@")
+        bio_link = ""
+        if "bioLink" in user_info and isinstance(user_info["bioLink"], dict) and "link" in user_info["bioLink"]:
+            bio_link = user_info["bioLink"]["link"]
+            if "target=" in bio_link:
+                try:
+                    import urllib.parse
+                    bio_link = urllib.parse.unquote(bio_link.split("target=")[1].split("&")[0])
+                except Exception:
+                    pass
+
+        signature = user_info.get("signature", "")
+        full_bio = f"{signature} {bio_link}".strip()
+        bio_links = [bio_link] if bio_link else []
+
         profile_dict = {
             "author_id": str(user_info.get("id", "")),
             "unique_id": unique_id,
@@ -184,7 +198,9 @@ def fetch_raw_creator_profile(
             "following": int(stats_module.get("followingCount", 0)),
             "heart_count": int(stats_module.get("heartCount", 0)),
             "video_count": int(stats_module.get("videoCount", 0)),
-            "bio": user_info.get("signature", ""),
+            "bio": full_bio,
+            "bio_link": bio_link,
+            "bio_links": bio_links,
             "avatar_url": (
                 user_info.get("avatarLarger")
                 or user_info.get("avatarMedium")
@@ -204,8 +220,8 @@ def fetch_raw_creator_profile(
         for item in item_list[:10]:
             pid = str(item.get("id", ""))
             desc = item.get("desc", "")
-            pstats = item.get("stats", {})
-            video_obj = item.get("video", {})
+            pstats = item.get("stats", {}) or {}
+            video_obj = item.get("video", {}) or {}
             cover_url = video_obj.get("cover") or video_obj.get("originCover") or ""
             create_time = item.get("createTime")
             posted_at = datetime.fromtimestamp(int(create_time), tz=UTC).isoformat() if create_time else None
@@ -214,10 +230,10 @@ def fetch_raw_creator_profile(
                 "platformPostId": pid,
                 "postUrl": f"https://www.tiktok.com/@{unique_id}/video/{pid}",
                 "caption": desc,
-                "views": int(pstats.get("playCount", 0)),
-                "likes": int(pstats.get("diggCount", 0)),
-                "comments": int(pstats.get("commentCount", 0)),
-                "shares": int(pstats.get("shareCount", 0)),
+                "views": int(pstats.get("playCount", 0) or 0),
+                "likes": int(pstats.get("diggCount", 0) or 0),
+                "comments": int(pstats.get("commentCount", 0) or 0),
+                "shares": int(pstats.get("shareCount", 0) or 0),
                 "coverUrl": cover_url,
                 "postedAt": posted_at,
             })

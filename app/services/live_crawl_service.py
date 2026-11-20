@@ -75,6 +75,7 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
         display_name=display_name,
         bio=bio,
         followers=followers,
+        bio_links=profile_dict.get("bio_links", []),
         is_verified=is_verified,
     )
     previews = [
@@ -87,6 +88,19 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
         for p in recent_posts
     ]
     decision_result = RuleEngine.evaluate(profile_meta, previews)
+
+    # Nếu Rule Engine chưa chắc chắn (SKIP_INSUFFICIENT hoặc NEEDS_MANAGER_REVIEW) và có bài đăng, xin ý kiến AI Reviewer
+    if decision_result.decision in {
+        Decision.SKIP_INSUFFICIENT, Decision.NEEDS_MANAGER_REVIEW
+    } and len(previews) > 0:
+        from app.ai.analyzer import get_llm_enrichment
+        from app.services.ai_candidate_review import review_candidate
+        try:
+            decision_result = review_candidate(
+                profile_meta, previews, decision_result, get_llm_enrichment
+            )
+        except Exception as exc:
+            logger.warning("AI second opinion failed in live crawl: %s", type(exc).__name__)
 
     # 3. Lưu Staging DB
     staging_record = CandidateStagingRecord(

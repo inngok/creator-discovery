@@ -281,7 +281,10 @@ def _predict_niche(category: str, text: str) -> str:
     return "UNKNOWN"
 
 
-import yake
+try:
+    import yake
+except ImportError:
+    yake = None
 
 
 def _extract_tags(text: str) -> list[str]:
@@ -289,15 +292,16 @@ def _extract_tags(text: str) -> list[str]:
     if not text or len(text.strip()) == 0:
         return []
 
+    if not yake:
+        # Fallback to simple regex tokens if yake is not installed
+        words = [w.strip("#@,.").lower() for w in text.split() if len(w) > 3]
+        return list(dict.fromkeys(words))[:5]
+
     try:
-        # Sử dụng thuật toán YAKE để lấy cụm từ (Phrases) thay vì từng chữ rời rạc
         kw_extractor = yake.KeywordExtractor(
             lan="vi", n=3, dedupLim=0.9, dedupFunc="seqm", windowsSize=1, top=5
         )
         keywords = kw_extractor.extract_keywords(text)
-
-        # YAKE trả về danh sách các tuple (từ_khóa, điểm_số). Điểm số càng thấp càng tốt.
-        # Rút trích chỉ lấy các từ khóa.
         top_tags = [kw[0] for kw in keywords]
         return top_tags
     except Exception as e:

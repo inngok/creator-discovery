@@ -105,8 +105,8 @@ class RuleEngine:
                     evidence=evidence.raw_metrics,
                 )
 
-            # Bio mơ hồ, không có từ khóa review / unboxing / chia sẻ và không có tick xanh -> SKIP_INSUFFICIENT
-            if not evidence.has_koc_review_bio and not (profile.is_verified or evidence.has_influence_signal or evidence.has_expertise_title):
+            # Bio mơ hồ, không có affiliate link, không có từ khóa review / unboxing / chia sẻ và không có tick xanh -> SKIP_INSUFFICIENT
+            if not (evidence.has_koc_review_bio or evidence.has_affiliate_link) and not (profile.is_verified or evidence.has_influence_signal or evidence.has_expertise_title):
                 reasons.append("BR08_INSUFFICIENT_DATA")
                 return RuleDecisionResult(
                     decision=Decision.SKIP_INSUFFICIENT,
@@ -158,8 +158,12 @@ class RuleEngine:
             )
             # Điều kiện KOC-04: Tối thiểu 2 bài có nhận xét cụ thể ưu/nhược
             cond_koc_04 = evidence.koc_opinion_post_count >= KOC_MIN_OPINION_POSTS
-            # Điều kiện KOC-05: Có bằng chứng độc lập (bio review hoặc affiliate link)
-            cond_koc_05 = evidence.has_koc_review_bio or evidence.has_affiliate_link
+            # Điều kiện KOC-05: Có bằng chứng độc lập (bio review, affiliate link hoặc phần lớn bài là review)
+            cond_koc_05 = (
+                evidence.has_koc_review_bio
+                or evidence.has_affiliate_link
+                or evidence.koc_review_post_count >= 3
+            )
 
             if cond_koc_03 and cond_koc_04 and cond_koc_05:
                 is_koc_candidate = True

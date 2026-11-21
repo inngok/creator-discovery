@@ -74,7 +74,7 @@ def _setup_network_interception(page: Page, username: str) -> list[Post]:
     def handle_response(response):
         if (
             "api" in response.url
-            and "item_list" in response.url
+            and "post/item_list" in response.url
             and response.status == 200
         ):
             try:
@@ -84,10 +84,14 @@ def _setup_network_interception(page: Page, username: str) -> list[Post]:
                 body = json.loads(text)
                 itemList = body.get("itemList", [])
                 for v in itemList:
-                    if len(recent_posts) >= 3:
+                    if len(recent_posts) >= 10:
                         break
                     post_id = str(v.get("id", ""))
-                    if post_id in seen_post_ids:
+                    author = v.get("author") or {}
+                    author_name = author.get("uniqueId", "") if isinstance(author, dict) else ""
+                    if author_name and author_name.casefold() != username.lstrip("@").casefold():
+                        continue
+                    if not post_id or post_id in seen_post_ids:
                         continue
                     seen_post_ids.add(post_id)
                     title = v.get("desc", "")
@@ -239,20 +243,22 @@ def _crawl_tiktok_profile_sync(username: str) -> IngestPayload | None:
 
             # Scroll để trigger fetch list video API
             for _ in range(3):
-                if len(recent_posts) >= 5:
+                if len(recent_posts) >= 10:
                     break
                 scroll_amount = random.randint(800, 1500)
                 page.evaluate(f"window.scrollBy(0, {scroll_amount});")
                 page.wait_for_timeout(2000)
 
             # Dự phòng bóc trực tiếp từ DOM nếu network interception chưa kịp lấy
-            if not recent_posts:
+            if len(recent_posts) < 10:
                 content = page.content()
                 soup = BeautifulSoup(content, "html.parser")
                 for a in soup.select("a[href*='/video/']"):
-                    if len(recent_posts) >= 5:
+                    if len(recent_posts) >= 10:
                         break
                     href = a.get("href", "")
+                    if not re.search(r"/@" + re.escape(username) + r"/video/", href, re.IGNORECASE):
+                        continue
                     text = a.get_text(strip=True)
                     img = a.find("img")
                     alt = img.get("alt", "") if img else ""

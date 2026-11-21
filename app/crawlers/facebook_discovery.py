@@ -8,6 +8,8 @@ from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
 from app.crawlers.search_extractor import evaluate_tier0_search_card
+from app.crawlers.tiktok_discovery import _run_profile_check
+from app.services.discovery_verification import verify_discovery_profile, matches_requested_topic
 
 logger = setup_logger("facebook_discovery")
 
@@ -17,7 +19,8 @@ class FacebookDiscoveryError(RuntimeError):
 
 
 def search_new_facebook_candidates(
-    keywords: list[str], max_per_keyword: int = 10, max_total: int = 30
+    keywords: list[str], max_per_keyword: int = 10, max_total: int = 30,
+    requested_category: str | None = None,
 ) -> list[dict]:
     """
     Tìm tác giả Facebook qua hashtag và Pages theo từ khóa.
@@ -31,6 +34,8 @@ def search_new_facebook_candidates(
     accessible_pages = 0
     keyword_counts = {}
     browser_restarts = 0
+    profile_checks = 0
+    verification_budget = min(max_total * 3, 30)
     with sync_playwright() as p:
         try:
             from app.crawlers.facebook_crawler import (
@@ -67,7 +72,7 @@ def search_new_facebook_candidates(
             searches = deque(searches)
             while searches:
                 kw, search_url, is_hashtag = searches.popleft()
-                if len(discovered) >= max_total:
+                if len(discovered) >= max_total or profile_checks >= verification_budget:
                     break
                 if keyword_counts.get(kw, 0) >= max_per_keyword:
                     continue
@@ -119,6 +124,13 @@ def search_new_facebook_candidates(
                             continue
 
                         cand["platform"] = "FACEBOOK"
+                        if profile_checks >= verification_budget:
+                            break
+                        profile_checks += 1
+                        if not _run_profile_check(verify_discovery_profile, cand):
+                            continue
+                        if not matches_requested_topic(cand, f"{requested_category or ''}; {kw}"):
+                            continue
                         discovered.append(cand)
                         kw_count += 1
                         keyword_counts[kw] = kw_count

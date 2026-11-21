@@ -8,6 +8,10 @@ from app.services.category_discovery_service import CategoryDiscoveryService
 
 class FacebookHuntRegressionTest(unittest.TestCase):
     def setUp(self):
+        for target in ("verify_discovery_profile", "matches_requested_topic"):
+            checker = patch(f"app.crawlers.facebook_discovery.{target}", return_value=True)
+            checker.start()
+            self.addCleanup(checker.stop)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.history_path = Path(directory.name) / "results.jsonl"
@@ -123,7 +127,8 @@ class FacebookHuntRegressionTest(unittest.TestCase):
         result = service.get_candidates_by_category("FOOD", limit=3, platform="FACEBOOK",
                                                      keywords=["#review đồ ăn", "food tour"])
         self.assertEqual(len(result), 3)
-        search.assert_called_once_with(keywords=["review đồ ăn", "food tour"], max_per_keyword=3, max_total=3)
+        search.assert_called_once_with(keywords=["review đồ ăn", "food tour"], max_per_keyword=3,
+                                       max_total=3, requested_category="FOOD")
 
     @patch("app.crawlers.discovery_crawler.search_new_facebook_candidates", return_value=[])
     def test_empty_facebook_search_does_not_reuse_unrelated_staging(self, search):

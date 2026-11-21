@@ -49,14 +49,20 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
         stealth.apply_stealth_sync(page)
 
         def handle_response(res):
-            if "item_list" in res.url and res.status == 200:
+            if "post/item_list" in res.url and res.status == 200:
                 try:
                     text = res.text()
                     if text and text.strip().startswith("{"):
                         body = json.loads(text)
                         items = body.get("itemList", [])
-                        if items and not captured_posts:
-                            captured_posts.extend(items)
+                        for item in items:
+                            author = item.get("author") or {}
+                            author_name = author.get("uniqueId", "") if isinstance(author, dict) else ""
+                            if author_name and author_name.casefold() != clean_user.casefold():
+                                continue
+                            if (item.get("id") and len(captured_posts) < 10
+                                    and not any(str(p.get("id")) == str(item["id"]) for p in captured_posts)):
+                                captured_posts.append(item)
                 except Exception:
                     pass
 
@@ -77,7 +83,7 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
 
             # Chờ tối đa 3s để API post/item_list kịp phản hồi
             for _ in range(6):
-                if captured_posts:
+                if len(captured_posts) >= 10:
                     break
                 page.wait_for_timeout(500)
 
@@ -101,9 +107,18 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
         return None
 
     # Dự phòng bóc video trực tiếp từ DOM nếu API post/item_list chưa bắt được
-    if not captured_posts:
+    # Preserve SSR posts and supplement partial API responses with owned DOM cards.
+    ssr_posts = data.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("itemList", []) or data.get("itemList", [])
+    for item in ssr_posts:
+        if item.get("id") and not any(str(p.get("id")) == str(item["id"]) for p in captured_posts):
+            captured_posts.append(item)
+    if len(captured_posts) < 10:
         for a in soup.select("a[href*='/video/'], a[href*='/photo/']"):
+            if len(captured_posts) >= 10:
+                break
             href = a.get("href", "")
+            if not re.search(r"/@" + re.escape(clean_user) + r"/(?:video|photo)/", href, re.IGNORECASE):
+                continue
             text = a.get_text(strip=True)
             img = a.find("img")
             alt = img.get("alt", "") if img else ""

@@ -30,7 +30,7 @@ class ProcessingStatus(str, Enum):
 
 
 # Phiên bản bộ quy tắc phân loại
-RULE_VERSION = "v2.0-precision"
+RULE_VERSION = "v2.1-evidence-recall"
 
 # Các ngưỡng thử nghiệm cấu hình tập trung
 MIN_POST_PREVIEWS = 5

@@ -1,3 +1,4 @@
+import re
 from typing import Any
 from pydantic import BaseModel, Field
 
@@ -219,7 +220,10 @@ class SignalExtractor:
             matched.append("BIO_HAS_INFLUENCE_SIGNAL")
 
         # Booking Contact chuyên nghiệp
-        if profile.public_email or profile.public_phone:
+        if profile.public_email or profile.public_phone or re.search(
+            r"\b(?:booking|contact for work|business inquiries|liên hệ công việc|hợp tác)\b",
+            bio_clean,
+        ):
             evidence.has_work_contact = True
             matched.append("HAS_WORK_CONTACT")
 

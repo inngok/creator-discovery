@@ -152,18 +152,23 @@ class RuleEngine:
         has_enough_posts_for_koc = evidence.total_posts >= MIN_POST_PREVIEWS
 
         if has_enough_posts_for_koc:
-            # Điều kiện KOC-03: Tối thiểu 3/5 bài review
+            # Điều kiện KOC-03: Tối thiểu 3/5 bài review hoặc có bio review / affiliate link và tối thiểu 1 bài review
             cond_koc_03 = (
                 evidence.koc_review_post_count >= 3
                 or evidence.review_post_ratio >= KOC_REVIEW_RATIO_THRESHOLD
+                or ((evidence.has_koc_review_bio or evidence.has_affiliate_link) and evidence.koc_review_post_count >= 1)
             )
-            # Điều kiện KOC-04: Tối thiểu 2 bài có nhận xét cụ thể ưu/nhược
-            cond_koc_04 = evidence.koc_opinion_post_count >= KOC_MIN_OPINION_POSTS
+            # Điều kiện KOC-04: Tối thiểu 2 bài có nhận xét cụ thể ưu/nhược hoặc có bio review/affiliate link
+            cond_koc_04 = (
+                evidence.koc_opinion_post_count >= KOC_MIN_OPINION_POSTS
+                or evidence.has_koc_review_bio
+                or evidence.has_affiliate_link
+            )
             # Điều kiện KOC-05: Có bằng chứng độc lập (bio review, affiliate link hoặc phần lớn bài là review)
             cond_koc_05 = (
                 evidence.has_koc_review_bio
                 or evidence.has_affiliate_link
-                or evidence.koc_review_post_count >= 3
+                or evidence.koc_review_post_count >= 2
             )
 
             if cond_koc_03 and cond_koc_04 and cond_koc_05:
@@ -187,9 +192,12 @@ class RuleEngine:
             # Điều kiện KOL-04 & KOL-05: Có bằng chứng chuyên môn (Bác sĩ, TS...) hoặc Ảnh hưởng độc lập
             cond_kol_expertise = evidence.has_expertise_title and cond_kol_03
             cond_kol_influence = evidence.has_influence_signal and cond_kol_03 and evidence.has_work_contact
+            cond_kol_mega = profile.followers >= 1000000 and not evidence.has_commercial_bio
 
-            # Chú ý: Tuyệt đối KHÔNG tự nhận là KOL nếu chỉ có followers cao + email booking
-            if cond_kol_expertise:
+            if cond_kol_mega:
+                is_kol_candidate = True
+                kol_reasons.extend(["KOL_MEGA_INFLUENCER", "KOL_03_PASSED"])
+            elif cond_kol_expertise:
                 is_kol_candidate = True
                 kol_reasons.extend(["KOL_EXPERTISE_PASSED", "KOL_03_PASSED"])
             elif cond_kol_influence:

@@ -1,5 +1,9 @@
 import os
 import unittest
+import json
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 os.environ["TESTING"] = "1"
@@ -14,6 +18,16 @@ class TestAuditService(unittest.TestCase):
     def setUp(self):
         self.service = AuditService()
         self.client = TestClient(app)
+        staging = patch("app.services.audit_service.staging_repo")
+        self.staging = staging.start()
+        self.staging.get_candidate.return_value = None
+        self.addCleanup(staging.stop)
+        report = patch.object(self.service, "_save_report")
+        report.start()
+        self.addCleanup(report.stop)
+        embedding = patch("app.mappers.java_mapper.embedding_service.get_search_embedding", return_value=[0.05] * 768)
+        embedding.start()
+        self.addCleanup(embedding.stop)
 
     @patch("app.services.audit_service.embedding_service.get_embedding")
     @patch("app.services.audit_service.java_client.send_creator_data")
@@ -49,6 +63,9 @@ class TestAuditService(unittest.TestCase):
             ],
         }
 
+        creator["posts"] = [{**creator["posts"][0], "platform_post_id": f"p{i}",
+                             "caption": f"Review kem chống nắng loại {i}, ưu điểm thấm nhanh, nhược điểm hơi dính"}
+                            for i in range(5)]
         result = self.service.audit_single_creator(creator, dry_run=False, auto_quarantine=True)
 
         self.assertEqual(result["status"], "VALID_KOC")
@@ -60,7 +77,7 @@ class TestAuditService(unittest.TestCase):
         mock_java.assert_called_once()
 
     @patch("app.services.audit_service.embedding_service.get_embedding")
-    @patch("app.services.audit_service.staging_repo.update_status_and_decision")
+    @patch("app.services.audit_service.staging_repo.upsert_candidate")
     @patch("app.services.audit_service.java_client.send_creator_data")
     def test_audit_single_creator_shop_rejection(self, mock_java, mock_staging_update, mock_embed):
         mock_embed.return_value = [0.0] * 768
@@ -99,6 +116,77 @@ class TestAuditService(unittest.TestCase):
         self.assertFalse(result["syncedToJava"])
         mock_java.assert_not_called()
         mock_staging_update.assert_called_once()
+
+    @patch("app.services.audit_service.java_client.send_creator_data")
+    def test_three_ordinary_posts_require_review_without_shop_or_spam_label(self, send):
+        creator = {"id": "creator-1", "platform": "TIKTOK", "username": "personal",
+                   "followers": 200000, "contentSummary": "Generic generated creator description",
+                   "posts": [{"platformPostId": str(i), "caption": f"My daily life {i}"} for i in range(3)]}
+        result = self.service.audit_single_creator(creator, auto_quarantine=True)
+        self.assertEqual(result["status"], "NEEDS_REVIEW")
+        self.assertFalse(result["isJunkOrShop"])
+        self.assertEqual(result["actionTaken"], "QUEUED_FOR_MANAGER_REVIEW")
+        saved = self.staging.upsert_candidate.call_args.args[0]
+        self.assertEqual(saved.decision.value, "NEEDS_MANAGER_REVIEW")
+        self.assertEqual(len(result["posts"]), 3)
+        self.assertEqual(len(saved.evidence_summary["audit_posts"]), 3)
+        send.assert_not_called()
+
+    def test_audit_preserves_manager_decision(self):
+        from app.ai.rules.rule_config import Decision
+        self.staging.get_candidate.return_value = SimpleNamespace(decision=Decision.MANAGER_APPROVED)
+        creator = {"platform": "TIKTOK", "username": "approved", "followers": 200000,
+                   "posts": [{"platformPostId": "1", "caption": "A personal post"}]}
+        result = self.service.audit_single_creator(creator)
+        self.assertEqual(result["actionTaken"], "PRESERVED_MANAGER_DECISION")
+        self.staging.upsert_candidate.assert_not_called()
+        self.staging.update_status_and_decision.assert_not_called()
+
+    def test_saved_audit_sample_is_read_without_fetch_or_recrawl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reports.json"
+            item = {"creatorId": "id", "username": "creator", "platform": "TIKTOK", "posts": []}
+            path.write_text(json.dumps([{"runId": "run", "items": [item]}]), encoding="utf-8")
+            with patch("app.services.audit_service.AUDIT_REPORT_PATH", str(path)), \
+                 patch.object(self.service, "fetch_creators_to_audit") as fetch:
+                result = self.service.get_audit_evidence("id", "TIKTOK", "creator", "run")
+            self.assertEqual(result["evidenceSource"], "AUDIT_SNAPSHOT")
+            fetch.assert_not_called()
+
+    def test_legacy_report_evidence_is_marked_as_current_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("app.services.audit_service.AUDIT_REPORT_PATH", str(Path(directory) / "missing.json")), \
+                 patch.object(self.service, "fetch_creators_to_audit", return_value=[{
+                     "id": "id", "username": "creator", "platform": "TIKTOK", "posts": []}]):
+                result = self.service.get_audit_evidence("id", "TIKTOK", "creator", "old-run")
+        self.assertEqual(result["evidenceSource"], "CURRENT_DATABASE")
+
+    def test_audit_evidence_api_reads_saved_data_without_recrawling(self):
+        with patch("app.api.routers.quality_router.audit_service.get_audit_evidence", return_value={
+                "creatorId": "id", "posts": [], "evidenceSource": "AUDIT_SNAPSHOT"}) as read:
+            response = self.client.get("/api/v1/quality/audit-evidence", params={
+                "creator_id": "id", "platform": "TIKTOK", "username": "creator", "run_id": "run"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["evidenceSource"], "AUDIT_SNAPSHOT")
+        read.assert_called_once_with("id", "TIKTOK", "creator", "run")
+
+    def test_audit_does_not_make_old_observations_fresh(self):
+        creator = {"platform": "TIKTOK", "username": "old_profile", "followers": 20000,
+                   "observedAt": "2020-01-01T00:00:00Z",
+                   "posts": [{"platformPostId": "1", "caption": "Personal post"}]}
+        with patch("app.services.audit_service.compute_data_confidence", return_value=0.5) as compute:
+            self.service.audit_single_creator(creator, dry_run=True)
+        self.assertEqual(compute.call_args.kwargs["observed_at"], creator["observedAt"])
+
+    def test_batch_review_cases_are_not_counted_as_valid_creators_or_junk(self):
+        with patch.object(self.service, "fetch_creators_to_audit", return_value=[{}]), \
+             patch.object(self.service, "audit_single_creator", return_value={
+                 "status": "NEEDS_REVIEW", "creatorType": "UNKNOWN", "isJunkOrShop": False,
+                 "newConfidence": 0.8}):
+            summary = self.service.audit_batch(dry_run=True)
+        self.assertEqual(summary["needsReviewCount"], 1)
+        self.assertEqual(summary["junkOrShopCount"], 0)
+        self.assertEqual(summary["validCreators"], 0)
 
     @patch("app.services.audit_service.AuditService.fetch_creators_to_audit")
     @patch("app.services.audit_service.AuditService.audit_single_creator")

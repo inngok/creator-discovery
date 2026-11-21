@@ -60,6 +60,8 @@ class AuditService:
         offset: int = 0,
         platform: Optional[str] = None,
         category: Optional[str] = None,
+        creator_id: Optional[str] = None,
+        username: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Lấy danh sách Creator cần thẩm định từ PostgreSQL hoặc Staging SQLite."""
         conn = self._get_pg_connection()
@@ -74,10 +76,19 @@ class AuditService:
                            COALESCE(m.content_summary, ''), m.observed_at,
                            COALESCE(m.data_confidence, 0.0)
                     FROM creator c
-                    LEFT JOIN public_creator_metric m ON c.id = m.creator_id
+                    LEFT JOIN public_creator_metric m ON m.id = (
+                        SELECT latest.id FROM public_creator_metric latest
+                        WHERE latest.creator_id = c.id
+                        ORDER BY latest.collected_at DESC, latest.id DESC LIMIT 1)
                     WHERE 1=1
                 """
                 params: list[Any] = []
+                if creator_id:
+                    query += " AND c.id::text = %s"
+                    params.append(creator_id)
+                if username:
+                    query += " AND LOWER(c.user_name) = LOWER(%s)"
+                    params.append(username.strip().lstrip("@"))
                 if platform:
                     query += " AND UPPER(c.platform) = %s"
                     params.append(platform.upper())
@@ -148,7 +159,14 @@ class AuditService:
                     conn.close()
 
         # Fallback lấy từ Staging SQLite
-        staging_records, _ = staging_repo.list_candidates(limit=limit, offset=offset, platform=platform)
+        if username:
+            record = staging_repo.get_candidate(platform or "TIKTOK", username)
+            staging_records = [record] if record else []
+        elif creator_id:
+            record = staging_repo.get_candidate_by_id(creator_id)
+            staging_records = [record] if record else []
+        else:
+            staging_records, _ = staging_repo.list_candidates(limit=limit, offset=offset, platform=platform)
         return [
             {
                 "id": s.id,
@@ -180,6 +198,7 @@ class AuditService:
         creator_id = str(creator_data.get("id") or creator_data.get("creator_id") or uname)
         display_name = creator_data.get("displayName") or creator_data.get("display_name") or uname
         content_summary = creator_data.get("contentSummary") or creator_data.get("content_summary") or ""
+        source_bio = creator_data.get("bio") or ""
         external_id = creator_data.get("externalId") or creator_data.get("external_id") or ""
         category = creator_data.get("category") or "Lifestyle"
         niche = creator_data.get("niche") or "General"
@@ -193,24 +212,26 @@ class AuditService:
         old_confidence = float(creator_data.get("oldDataConfidence") or creator_data.get("data_confidence") or 0.0)
         followers = int(creator_data.get("followers") or 0)
         posts_data = creator_data.get("posts", [])
+        observed_at = creator_data.get("observedAt") or creator_data.get("observed_at")
 
         # 1. Nếu không có bài post trong DB và là TikTok -> Thử lấy SSR nhẹ
         if not posts_data and plat == "TIKTOK":
             try:
                 fetch_res = fetch_tiktok_preflight(uname)
                 if fetch_res:
+                    observed_at = datetime.now(UTC).isoformat()
                     prof, previews = fetch_res
                     followers = prof.followers or followers
                     display_name = prof.display_name or display_name
                     external_id = prof.external_id or external_id
-                    content_summary = prof.bio or content_summary
+                    source_bio = prof.bio or source_bio
                     posts_data = [
                         {
-                            "platformPostId": f"p_{i}",
-                            "postUrl": f"https://www.tiktok.com/@{uname}",
+                            "platformPostId": p.post_id or f"p_{i}",
+                            "postUrl": f"https://www.tiktok.com/@{uname}/video/{p.post_id}" if p.post_id else "",
                             "caption": p.caption,
-                            "views": 0,
-                            "likes": 0,
+                            "views": p.views or 0,
+                            "likes": p.likes or 0,
                             "comments": 0,
                             "shares": 0,
                             "postedAt": "",
@@ -241,7 +262,7 @@ class AuditService:
             external_id=external_id,
             username=f"@{uname}",
             display_name=display_name,
-            bio=content_summary,
+            bio=source_bio,
             followers=followers,
             bio_links=[],
         )
@@ -260,7 +281,7 @@ class AuditService:
         smart_type = classify_creator_type_smart(
             username=uname,
             display_name=display_name,
-            bio=content_summary,
+            bio=source_bio,
             followers=followers,
             recent_posts=recent_posts,
             category=category,
@@ -268,15 +289,30 @@ class AuditService:
             classified_type=rule_result.primary_type,
         )
 
-        is_junk = smart_type not in VALID_CREATOR_TYPES or rule_result.decision == Decision.AUTO_REJECT
-        audit_verdict = "JUNK_SHOP_OR_SPAM" if is_junk else smart_type
+        is_junk = (
+            rule_result.primary_type in {"BRAND", "ORGANIZATION", "SPAM"}
+            and rule_result.decision == Decision.AUTO_REJECT
+        )
+        if smart_type in VALID_CREATOR_TYPES:
+            final_creator_type = smart_type
+            audit_verdict = smart_type
+            needs_review = False
+            is_junk = False
+        elif is_junk:
+            final_creator_type = rule_result.primary_type
+            audit_verdict = "JUNK_SHOP_OR_SPAM"
+            needs_review = False
+        else:
+            final_creator_type = "UNKNOWN"
+            audit_verdict = "NEEDS_REVIEW"
+            needs_review = True
 
         # 5. Tính toán dataConfidence mới
         new_confidence = compute_data_confidence(
             source_type="PUBLIC",
-            observed_at=datetime.now(UTC),
+            observed_at=observed_at,
             avatar_url=avatar_url,
-            bio=content_summary,
+            bio=source_bio,
             followers=followers,
             avg_views=sum(p.views or 0 for p in recent_posts) / max(len(recent_posts), 1),
             avg_likes=sum(p.likes or 0 for p in recent_posts) / max(len(recent_posts), 1),
@@ -284,13 +320,19 @@ class AuditService:
             niche=niche,
             contact=contact,
             recent_posts=recent_posts,
-            er=0.05,
+            er=(sum((p.likes or 0) + (p.comments or 0) + (p.shares or 0) for p in recent_posts)
+                / max(len(recent_posts), 1) / followers * 100 if followers > 0 else 0.0),
         )
 
         action_taken = "NO_ACTION"
 
         # 6. Nếu là KOC/KOL hợp lệ và không phải dry-run -> Cập nhật sang Java Backend
-        if not is_junk and not dry_run:
+        existing_record = staging_repo.get_candidate(plat, uname) if not dry_run else None
+        manager_decided = existing_record is not None and existing_record.decision in {
+            Decision.MANAGER_APPROVED, Decision.MANAGER_REJECTED}
+        if manager_decided:
+            action_taken = "PRESERVED_MANAGER_DECISION"
+        elif not is_junk and not needs_review and not dry_run:
             try:
                 creator_info = CreatorInfo(
                     platform=Platform.TIKTOK if plat == "TIKTOK" else (Platform.FACEBOOK if plat == "FACEBOOK" else Platform.INSTAGRAM),
@@ -300,7 +342,7 @@ class AuditService:
                     profileUrl=profile_url,
                     avatarUrl=avatar_url,
                     followers=followers,
-                    bio=content_summary,
+                    bio=source_bio,
                 )
                 ai_enrich = AIEnrichment(
                     category=category,
@@ -329,31 +371,39 @@ class AuditService:
                 logger.warning(f"[AUDIT] Lỗi cập nhật creator {uname}: {update_err}")
 
         # 7. Nếu là tài khoản rác và auto_quarantine bật
-        elif is_junk and auto_quarantine and not dry_run:
-            staging_repo.update_status_and_decision(
-                platform=plat,
-                username=uname,
-                status=ProcessingStatus.FAILED,
-                decision=Decision.AUTO_REJECT,
+        elif not dry_run and (needs_review or (is_junk and auto_quarantine)):
+            staging_repo.upsert_candidate(CandidateStagingRecord(
+                platform=plat, username=uname, external_id=external_id,
+                display_name=display_name, profile_url=profile_url,
+                processing_status=ProcessingStatus.PREFLIGHT_DONE,
+                decision=Decision.NEEDS_MANAGER_REVIEW if needs_review else Decision.AUTO_REJECT,
                 primary_type=smart_type,
-                reason_codes=rule_result.reason_codes or ["AUDIT_DETECTED_JUNK"],
-            )
-            action_taken = "QUARANTINED_IN_STAGING"
+                reason_codes=rule_result.reason_codes or ["AUDIT_REQUIRES_REVIEW"],
+                matched_signals=rule_result.matched_signals,
+                evidence_summary={**rule_result.evidence, "audit_posts": posts_data,
+                                  "audit_verdict": audit_verdict},
+            ))
+            action_taken = "QUEUED_FOR_MANAGER_REVIEW" if needs_review else "QUARANTINED_IN_STAGING"
 
         return {
             "creatorId": creator_id,
             "platform": plat,
             "username": uname,
             "displayName": display_name,
+            "profileUrl": profile_url,
+            "bio": source_bio,
+            "contentSummary": content_summary,
+            "posts": [p.model_dump(mode="json") for p in recent_posts],
+            "evidence": rule_result.evidence,
             "followers": followers,
             "oldConfidence": old_confidence,
             "newConfidence": new_confidence,
             "oldType": niche,
             "verdict": audit_verdict,
-            "status": "JUNK_SHOP_CATALOG" if is_junk else f"VALID_{smart_type}",
-            "creatorType": smart_type,
+            "status": "JUNK_SHOP_CATALOG" if is_junk else "NEEDS_REVIEW" if needs_review else f"VALID_{final_creator_type}",
+            "creatorType": final_creator_type,
             "isJunkOrShop": is_junk,
-            "hasEmbedding": not is_junk,
+            "hasEmbedding": action_taken == "UPDATED_JAVA_BACKEND",
             "syncedToJava": action_taken == "UPDATED_JAVA_BACKEND",
             "decision": rule_result.decision.value,
             "reasonCodes": rule_result.reason_codes,
@@ -381,12 +431,15 @@ class AuditService:
         koc_count = 0
         kol_count = 0
         junk_count = 0
+        review_count = 0
 
         for cr in creators:
             res = self.audit_single_creator(cr, dry_run=dry_run, auto_quarantine=auto_quarantine)
             details.append(res)
             if res.get("isJunk", False) or res.get("isJunkOrShop", False):
                 junk_count += 1
+            elif res.get("status") == "NEEDS_REVIEW":
+                review_count += 1
             elif res.get("verdict") == "KOL" or res.get("creatorType") == "KOL":
                 kol_count += 1
             else:
@@ -408,6 +461,7 @@ class AuditService:
             "kocCount": koc_count,
             "kolCount": kol_count,
             "junkOrShopCount": junk_count,
+            "needsReviewCount": review_count,
             "cleanRate": clean_rate,
             "averageDataConfidence": avg_confidence,
             "filter": {
@@ -437,6 +491,28 @@ class AuditService:
                 json.dump(reports, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"[AUDIT] Không thể lưu audit_reports.json: {e}")
+
+    def get_audit_evidence(self, creator_id: str, platform: str, username: str,
+                           run_id: str | None = None) -> dict[str, Any] | None:
+        """Read saved audit evidence; legacy reports fall back to current stored data. Never recrawl."""
+        if os.path.exists(AUDIT_REPORT_PATH):
+            with open(AUDIT_REPORT_PATH, encoding="utf-8") as source:
+                reports = json.load(source)
+            for report in reports if isinstance(reports, list) else []:
+                if run_id and report.get("runId") != run_id:
+                    continue
+                for item in report.get("items", []):
+                    if (item.get("creatorId") == creator_id
+                            and item.get("platform", "").upper() == platform.upper()
+                            and item.get("username", "").casefold() == username.casefold()
+                            and "posts" in item):
+                        return {**item, "evidenceSource": "AUDIT_SNAPSHOT"}
+        rows = self.fetch_creators_to_audit(limit=1, platform=platform,
+                                            creator_id=creator_id, username=username)
+        if not rows:
+            return None
+        row = rows[0]
+        return {**row, "creatorId": row.get("id", creator_id), "evidenceSource": "CURRENT_DATABASE"}
 
     def get_latest_report(self) -> dict[str, Any]:
         """Lấy báo cáo thẩm định gần nhất."""

@@ -94,22 +94,36 @@ def classify_creator_type_smart(
         if not (has_affiliate and koc_review_matches >= 3 and kol_influence_matches == 0):
             return "KOL"
 
-    # B. Nếu có dấu hiệu KOC rõ rệt: Có link giỏ hàng/affiliate HOẶC có từ khóa review/unboxing/săn sale
-    # Bất kể follower 500k, 1M hay 2M -> Vẫn là KOC (Key Opinion Consumer)
-    if (has_affiliate and koc_review_matches >= 1) or (koc_review_matches >= 2 and koc_opinion_matches >= 1):
-        # Nếu có lượng follower cực khủng (> 2M) và được coi là Đại sứ thương hiệu lớn
+    # B. Kênh Mega Creator quy mô cực lớn (>= 1M followers)
+    # Những người có hàng triệu người theo dõi (như Ngọc Matcha, Quyền Leo...) là KOL có tầm ảnh hưởng lớn
+    if followers >= 1000000 and entity_type not in {"BRAND", "ORGANIZATION", "SPAM"}:
+        if has_affiliate and koc_review_matches >= 2:
+            return "KOC"
+        return "KOL"
+
+    # C. Nếu có dấu hiệu KOC rõ rệt: Có link giỏ hàng/affiliate HOẶC tên kênh có 'review/unbox/trainghiem'
+    # Hoặc có từ khóa review/unboxing/săn sale
+    has_review_in_name = any(kw in f"{username} {display_name}".lower() for kw in ["review", "unbox", "đập hộp", "trải nghiệm", "swatch", "koc"])
+    if has_review_in_name and followers >= 5000:
+        return "KOC"
+
+    if (has_affiliate and (koc_review_matches >= 1 or has_review_in_name)) or (koc_review_matches >= 2 and koc_opinion_matches >= 1):
         if followers >= 2000000 and kol_influence_matches >= 2:
             return "KOL"
         return "KOC"
 
-    # C. Nếu có hoạt động ảnh hưởng lớn (Đại sứ, Diễn giả, Fashion week, Giám khảo...)
+    # D. Nếu có hoạt động ảnh hưởng lớn (Đại sứ, Diễn giả, Fashion week, Giám khảo...)
     if kol_influence_matches >= 1 and (has_work_contact or followers >= 100000):
         return "KOL"
 
-    # D. Kênh nội dung giải trí / Lifestyle thông thường:
-    # Nếu kênh rất lớn (>= 1M followers) và có quản lý/booking chuyên nghiệp -> KOL
-    if followers >= 1000000 and has_work_contact:
+    # E. Kênh nội dung giải trí / Lifestyle thông thường:
+    # Nếu kênh lớn (>= 300k followers) và có quản lý/booking chuyên nghiệp -> KOL
+    if followers >= 300000 and has_work_contact:
         return "KOL"
+
+    # F. Nếu có affiliate link rõ ràng và lượng follower đạt chuẩn KOC
+    if has_affiliate and followers >= 5000:
+        return "KOC"
 
     # No affirmative review/influence evidence: do not invent KOC eligibility.
     return "UNKNOWN"

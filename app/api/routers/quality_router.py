@@ -370,3 +370,17 @@ async def get_latest_audit_report() -> dict[str, Any]:
     """
     return audit_service.get_latest_report()
 
+
+@router.get("/audit-evidence", summary="Xem hồ sơ và mẫu bài thẩm định, không cào lại")
+async def get_audit_evidence(
+    creator_id: str = Query(..., min_length=1, max_length=100),
+    platform: str = Query(..., pattern="^(TIKTOK|FACEBOOK|INSTAGRAM|YOUTUBE)$"),
+    username: str = Query(..., min_length=1, max_length=200),
+    run_id: str | None = Query(None, max_length=100),
+) -> dict[str, Any]:
+    result = await asyncio.to_thread(audit_service.get_audit_evidence,
+                                     creator_id, platform, username, run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Chưa tìm thấy dữ liệu hồ sơ đã lưu.")
+    return result
+

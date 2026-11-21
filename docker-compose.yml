@@ -1,6 +1,6 @@
 x-crawler: &crawler
   build: .
-  image: influencermatch-crawler:local
+  image: ${CRAWLER_IMAGE:-influencermatch-crawler:local}
   restart: unless-stopped
   init: true
   env_file: .env

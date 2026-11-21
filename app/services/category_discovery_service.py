@@ -60,7 +60,8 @@ class CategoryDiscoveryService:
         remaining = limit - len(candidates)
         if remaining > 0 and target in {"FACEBOOK", "ALL", "BOTH"}:
             candidates.extend(search_new_facebook_candidates(
-                keywords=terms, max_per_keyword=remaining, max_total=remaining))
+                keywords=terms, max_per_keyword=remaining, max_total=remaining,
+                requested_category=category_code))
         return candidates[:limit]
 
 

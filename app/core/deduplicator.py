@@ -2,7 +2,7 @@ import os
 from datetime import UTC, datetime, timedelta
 import redis
 
-from app.ai.rules.rule_config import Decision, ProcessingStatus
+from app.ai.rules.rule_config import Decision, ProcessingStatus, MIN_FOLLOWERS_THRESHOLD
 from app.core.candidate_staging import staging_repo
 from app.core.logger import setup_logger
 
@@ -84,6 +84,16 @@ def should_enqueue_preflight(platform: str, username: str, cooldown_days: int = 
         last_dt = datetime.fromisoformat(record.last_checked_at.replace("Z", "+00:00"))
         if datetime.now(UTC) - last_dt < timedelta(days=cooldown_days):
             if record.decision == Decision.AUTO_REJECT:
+                # Old extraction failures and the former hard-coded 7k threshold
+                # must not keep otherwise eligible manual retries blocked for a week.
+                metrics = record.evidence_summary or {}
+                reasons = set(record.reason_codes or [])
+                if ("INSUFFICIENT_POST_DATA" in reasons
+                        or ("POST_VALIDATION_NOT_KOC_KOL" in reasons
+                            and metrics.get("posts_count") == 0)
+                        or ("TIER0_REJECT_LOW_FOLLOWERS" in reasons
+                            and metrics.get("followers", 0) >= MIN_FOLLOWERS_THRESHOLD)):
+                    return True, "RECHECK_PREVIOUS_INCOMPLETE_EVIDENCE"
                 return False, "RECENTLY_AUTO_REJECTED"
             if record.processing_status == ProcessingStatus.INGESTED:
                 return False, "ALREADY_INGESTED"

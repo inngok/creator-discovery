@@ -176,6 +176,9 @@ def _execute_deep_crawl(
         # 🛡️ GUARD 2: POST-CRAWL VALIDATION GUARD
         post_val = validate_post_crawl(result, is_refresh=is_refresh)
         if not post_val.is_valid:
+            incomplete = post_val.quarantine_reason in {
+                "INSUFFICIENT_POST_DATA", "INVALID_EXTERNAL_ID", "MISSING_CREATOR_PAYLOAD"
+            }
             logger.warning(
                 f"[WORKER] QUARANTINE {plat} @{clean_user}: Không đạt Post-Validation Guard "
                 f"(Lý do: {post_val.quarantine_reason}, Chi tiết: {post_val.details})"
@@ -184,11 +187,11 @@ def _execute_deep_crawl(
                 platform=plat,
                 username=clean_user,
                 status=ProcessingStatus.FAILED,
-                decision=Decision.AUTO_REJECT,
+                decision=Decision.SKIP_INSUFFICIENT if incomplete else Decision.AUTO_REJECT,
                 reason_codes=[post_val.quarantine_reason or "QUARANTINE_POST_VALIDATION_FAILED"],
             )
             return {
-                "status": "QUARANTINE_REJECTED",
+                "status": "INCOMPLETE" if incomplete else "QUARANTINE_REJECTED",
                 "reason": post_val.quarantine_reason,
                 "details": post_val.details,
                 "username": clean_user,
@@ -502,3 +505,14 @@ def auto_refresh_creators_in_db_task(self, limit: int = 25) -> dict:
         return {"status": "FAILED", "error": str(e)}
 
 
+
+
+@app.task(name="app.workers.tasks.batch_crawl_job", track_started=True)
+def batch_crawl_job(payload: dict) -> dict:
+    import asyncio
+    from fastapi import HTTPException
+    from app.api.routers.crawl_router import BatchCrawlRequest, batch_crawl_kocs
+    try:
+        return asyncio.run(batch_crawl_kocs(BatchCrawlRequest(**payload)))
+    except HTTPException as exc:
+        return {"status": "error", "error": str(exc.detail)}

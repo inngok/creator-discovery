@@ -56,7 +56,7 @@ def sync_creator_to_java_backend(
         Decision.MANAGER_APPROVED,
         Decision.NEEDS_MANAGER_REVIEW,
     ]:
-        return database_synced, sync_error, decision_result
+        return database_synced, decision_result.decision.value, decision_result
 
     try:
         creator_obj = CreatorInfo(
@@ -92,6 +92,22 @@ def sync_creator_to_java_backend(
         ai_obj = process_ai_enrichment(creator_obj, posts_objs)
         if ai_obj is None:
             raise ValueError("AI enrichment returned no result; skip ingest")
+
+        if (ai_obj.creatorType in {"USER", "UNKNOWN"}
+                and decision_result.decision in {Decision.AUTO_ACCEPT_KOC, Decision.AUTO_ACCEPT_KOL}
+                and decision_result.evidence.get("posts_count", 0) >= 5):
+            # Conflicting classifications over a real post sample need adjudication.
+            # Neither the rule engine nor the model silently overrides the other.
+            decision_result = decision_result.model_copy(update={
+                "decision": Decision.NEEDS_MANAGER_REVIEW,
+                "reason_codes": [*decision_result.reason_codes, "AI_CREATOR_TYPE_CONFLICT"],
+                "evidence": {**decision_result.evidence, "ai_creator_type": ai_obj.creatorType},
+            })
+            staging_repo.update_status_and_decision(
+                platform=platform_upper, username=unique_id,
+                status=ProcessingStatus.PREFLIGHT_DONE, decision=Decision.NEEDS_MANAGER_REVIEW,
+                primary_type=decision_result.primary_type, reason_codes=decision_result.reason_codes,
+            )
 
         if ai_obj.creatorType in {"BRAND", "USER"} and decision_result.decision != Decision.NEEDS_MANAGER_REVIEW:
             decision_result = decision_result.model_copy(update={

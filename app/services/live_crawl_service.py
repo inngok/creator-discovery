@@ -33,7 +33,8 @@ def clean_username_from_input(val: str, platform: str = "TIKTOK") -> str:
     return cleaned.removeprefix("@").strip().rstrip("/")
 
 
-def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dict[str, Any]:
+def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK",
+                          verified_snapshot: dict | None = None) -> dict[str, Any]:
     """
     Cào trực tiếp 1 KOC trong thời gian thực (TikTok, Facebook, Instagram):
     - Điều phối qua live_fetcher_service để lấy dữ liệu hồ sơ và bài đăng.
@@ -50,7 +51,14 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK") -> dic
     logger.info(f"[LIVE CRAWL] Bắt đầu cào trực tiếp cho @{clean_user} ({platform_upper})...")
 
     # 1. Bóc tách dữ liệu profile và clips theo nền tảng
-    profile_dict, recent_posts, err_resp = fetch_raw_creator_profile(clean_user, platform_upper, start_time)
+    if (verified_snapshot and verified_snapshot.get("platform") == platform_upper
+            and verified_snapshot.get("username", "").casefold() == clean_user.casefold()
+            and 0 <= time.time() - verified_snapshot.get("verified_at", 0) <= 300):
+        profile_dict = verified_snapshot["profile"]
+        recent_posts = verified_snapshot["posts"]
+        err_resp = None
+    else:
+        profile_dict, recent_posts, err_resp = fetch_raw_creator_profile(clean_user, platform_upper, start_time)
     if err_resp is not None:
         return err_resp
 

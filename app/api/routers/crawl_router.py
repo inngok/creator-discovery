@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -379,7 +379,11 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         c_plat = c.get("platform", req.platform.upper())
         if c_plat == "ALL":
             c_plat = "TIKTOK"
-        res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat)
+        if c.get("_verified_snapshot"):
+            res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat,
+                                          verified_snapshot=c["_verified_snapshot"])
+        else:
+            res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat)
         if res.get("status") == "success":
             success_count += 1
             total_latency += res.get("latency_ms", 0.0)
@@ -425,3 +429,41 @@ async def track_single_post_metrics(req: SinglePostMetricsRequest):
         raise HTTPException(status_code=400, detail=res.get("message"))
     return res
 
+
+
+@router.post("/batch-crawl/jobs", status_code=202)
+async def start_batch_crawl_job(req: BatchCrawlRequest) -> dict:
+    """Queue a batch without holding an HTTP connection during browser/AI work."""
+    if not is_redis_available():
+        raise HTTPException(status_code=503, detail="Crawler queue is unavailable")
+    from app.workers.tasks import batch_crawl_job
+    try:
+        task = batch_crawl_job.apply_async(args=[req.model_dump()], queue="default")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Could not enqueue crawl") from exc
+    return {"status": "QUEUED", "task_id": task.id,
+            "status_url": f"/api/v1/crawl/batch-crawl/jobs/{task.id}"}
+
+
+@router.get("/batch-crawl/jobs/{task_id}")
+async def get_batch_crawl_job(task_id: str) -> dict:
+    from uuid import UUID
+    try:
+        UUID(task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid task ID")
+    from app.workers.celery_app import app as celery_app
+    task = celery_app.AsyncResult(task_id)
+    try:
+        state = await asyncio.to_thread(lambda: task.state)
+        if state == "SUCCESS":
+            result = await asyncio.to_thread(lambda: task.result)
+            if isinstance(result, dict) and result.get("status") == "error":
+                return {"status": "FAILED", "task_id": task_id, "error": result.get("error", "Batch crawl failed")}
+            return {"status": "COMPLETED", "task_id": task_id, "result": result}
+        if state == "FAILURE":
+            return {"status": "FAILED", "task_id": task_id,
+                    "error": "Batch crawl failed; inspect crawler worker logs"}
+        return {"status": state, "task_id": task_id}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Crawler result store is unavailable") from exc

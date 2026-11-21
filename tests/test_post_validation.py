@@ -115,6 +115,22 @@ class TestPostValidationAndSafeIngestion(unittest.TestCase):
             engagement_rate=0.08,
         )
 
+    def test_missing_posts_does_not_poison_creator_with_rejection_cooldown(self):
+        username = "incomplete_creator"
+        staging_repo.upsert_candidate(CandidateStagingRecord(
+            platform="TIKTOK", username=username,
+            processing_status=ProcessingStatus.DEEP_CRAWL_QUEUED,
+            decision=Decision.AUTO_ACCEPT_KOC, primary_type="KOC"))
+        payload = self._create_mock_ingest_payload(username)
+        payload.recentPosts = []
+        with patch("app.workers.tasks._crawl_tiktok_profile_sync", return_value=payload), \
+             patch("app.workers.tasks.java_client.send_creator_data") as send:
+            result = process_tiktok_profile.run(username=username)
+        self.assertEqual(result["status"], "INCOMPLETE")
+        self.assertEqual(staging_repo.get_candidate("TIKTOK", username).decision,
+                         Decision.SKIP_INSUFFICIENT)
+        send.assert_not_called()
+
     def test_tc17_commercial_shop_catalog_blocked_at_post_validation(self):
         """TC17: Deep Crawl xong nhưng phát hiện toàn bài catalog shop -> Bị chặn tại Post-validation Guard."""
         username = "wholesale_catalog_shop_tc17"

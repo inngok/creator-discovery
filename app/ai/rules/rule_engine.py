@@ -6,6 +6,7 @@ from app.ai.rules.rule_config import (
     KOC_REVIEW_RATIO_THRESHOLD,
     KOL_REPRESENTATIVE_RATIO_THRESHOLD,
     MIN_POST_PREVIEWS,
+    MIN_FOLLOWERS_THRESHOLD,
     RULE_VERSION,
     Decision,
 )
@@ -95,7 +96,7 @@ class RuleEngine:
                     matched_signals=evidence.matched_signals,
                     evidence=evidence.raw_metrics,
                 )
-            if profile.followers < 7000:
+            if profile.followers < MIN_FOLLOWERS_THRESHOLD:
                 reasons.append("TIER0_REJECT_LOW_FOLLOWERS")
                 return RuleDecisionResult(
                     decision=Decision.AUTO_REJECT,
@@ -254,6 +255,17 @@ class RuleEngine:
             evidence.koc_review_post_count >= 2
             and (evidence.has_affiliate_link or evidence.has_koc_review_bio)
         )
+        # Captions often describe the experience without literally saying "review".
+        # An independent working creator with a review/unboxing bio and a full post
+        # sample merits review rather than being silently dropped by keyword rules.
+        has_caption_sparse_creator_potential = (
+            evidence.total_posts >= MIN_POST_PREVIEWS
+            and profile.followers >= MIN_FOLLOWERS_THRESHOLD
+            and evidence.has_creator_persona
+            and evidence.has_koc_review_bio
+            and evidence.has_work_contact
+            and not evidence.has_own_shop_or_selling
+        )
         has_kol_potential = (
             (evidence.has_expertise_title or evidence.has_influence_signal)
             and evidence.expertise_post_count >= 1
@@ -263,7 +275,7 @@ class RuleEngine:
             and evidence.koc_review_post_count >= 2
         )
 
-        if has_koc_potential:
+        if has_koc_potential or has_caption_sparse_creator_potential:
             reasons.append("BR06_SELECTIVE_REVIEW_KOC_POTENTIAL")
             return RuleDecisionResult(
                 decision=Decision.NEEDS_MANAGER_REVIEW,

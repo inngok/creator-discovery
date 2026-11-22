@@ -8,7 +8,7 @@ os.environ["DISABLE_CRAWL_PACING"] = "1"
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.routers import crawl_router
+from app.api.routers.post_metrics_router import router as post_metrics_router
 from app.core.post_metrics_models import MetricStatusEnum
 from app.services.single_post_tracker_service import (
     MAX_SAFE_INTEGER,
@@ -18,7 +18,7 @@ from app.services.single_post_tracker_service import (
 )
 
 test_app = FastAPI()
-test_app.include_router(crawl_router.router)
+test_app.include_router(post_metrics_router, prefix="/api/v1/crawl")
 
 
 class TestSinglePostTracker(unittest.TestCase):

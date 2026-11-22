@@ -50,5 +50,33 @@ class JavaClient:
             logger.error(f"Failed to connect to backend: {e}")
             return False
 
+    def send_post_metrics(self, payload: dict, endpoint: str | None = None) -> bool:
+        """
+        Bắn kết quả bóc tách chỉ số bài đăng (Ground Truth) sang Java Backend.
+        Java Backend sẽ lưu snapshot vào DB và thực hiện logic so sánh KPI của Campaign.
+        """
+        url = endpoint or os.environ.get(
+            "JAVA_POST_METRICS_SYNC_URL",
+            self.backend_url.replace("/creators/ingest", "/campaigns/posts/metrics-sync"),
+        )
+        try:
+            response = httpx.post(
+                url,
+                json=payload,
+                headers={"X-Service-Key": self.secret_key},
+                timeout=10.0,
+            )
+            if response.status_code not in [200, 201]:
+                logger.error(
+                    f"Failed to POST post metrics to backend. Status: {response.status_code}, Msg: {response.text}"
+                )
+                return False
+
+            logger.info("Successfully sent post metrics payload to Java backend!")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to backend for post metrics: {e}")
+            return False
+
 
 java_client = JavaClient()

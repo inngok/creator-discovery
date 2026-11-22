@@ -10,6 +10,7 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright, TimeoutEr
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
+from app.core.post_dates import normalize_post_date
 from app.core.models import AIEnrichment, CreatorInfo, IngestPayload, Platform, Post
 
 logger = setup_logger("facebook_crawler")
@@ -147,7 +148,7 @@ def extract_facebook_followers(raw_bio: str, page_text: str) -> int:
     return 0
 
 
-def extract_facebook_posts(soup: BeautifulSoup, clean_slug: str, max_posts: int = 5) -> List[Post]:
+def extract_facebook_posts(soup: BeautifulSoup, clean_slug: str, max_posts: int = 8) -> List[Post]:
     """Bóc tách bài viết gần nhất với selector đa ngôn ngữ."""
     recent_posts: List[Post] = []
     seen_post_ids = set()
@@ -240,7 +241,9 @@ def extract_facebook_posts(soup: BeautifulSoup, clean_slug: str, max_posts: int 
                 likes=likes,
                 comments=comments,
                 shares=shares,
-                postedAt=None,
+                postedAt=next((date for element in art.select("time[datetime], [data-utime], [itemprop='datePublished'][content]")
+                               if (date := normalize_post_date(element.get("datetime")
+                                   or element.get("data-utime") or element.get("content")))), None),
             )
         )
 
@@ -345,7 +348,7 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
             public_phone = phone_match.group(0) if phone_match else None
 
             # 4. Bóc tách bài viết gần nhất qua hàm modular
-            recent_posts = extract_facebook_posts(soup, clean_slug, max_posts=5)
+            recent_posts = extract_facebook_posts(soup, clean_slug, max_posts=8)
 
             avatar_url = og_image.get("content") if og_image else None
             cross_links = re.findall(r"https?://[^\s\"'>]+", clean_bio) if clean_bio else []

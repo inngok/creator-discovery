@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.models import IngestPayload
 from app.crawlers.facebook_crawler import crawl_facebook_profile
@@ -357,18 +357,12 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         except (FacebookDiscoveryError, TikTokDiscoveryError) as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
-    if not target_candidates and req.platform.upper() == "FACEBOOK":
-        raise HTTPException(status_code=422,
-            detail="Không tìm được kênh Facebook phù hợp với từ khóa. Facebook có thể yêu cầu đăng nhập; hãy kiểm tra kết nối hoặc thử nhập URL kênh cụ thể.")
-
     if not target_candidates:
+        if req.platform.upper() == "FACEBOOK":
+            raise HTTPException(status_code=422, detail="Không tìm được kênh Facebook phù hợp với từ khóa. Facebook có thể yêu cầu đăng nhập; hãy kiểm tra kết nối hoặc thử nhập URL kênh cụ thể.")
         if req.category and not req.usernames:
-            raise HTTPException(status_code=422,
-                detail="Đã kiểm tra nguồn tìm nhưng chưa có tài khoản mới đủ điều kiện và đúng chủ đề. Không lấy tài khoản sai ngành để bù số lượng.")
-        raise HTTPException(
-            status_code=400,
-            detail="Vui lòng chọn ngành nghề hợp lệ hoặc nhập ít nhất 1 username/link để cào.",
-        )
+            raise HTTPException(status_code=422, detail="Đã kiểm tra nguồn tìm nhưng chưa có tài khoản mới đủ điều kiện và đúng chủ đề. Không lấy tài khoản sai ngành để bù số lượng.")
+        raise HTTPException(status_code=400, detail="Vui lòng chọn ngành nghề hợp lệ hoặc nhập ít nhất 1 username/link để cào.")
 
     results = []
     success_count = 0
@@ -412,22 +406,14 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
     }
 
 
-class SinglePostMetricsRequest(BaseModel):
-    post_url: str = Field(..., description="Đường link bài đăng cụ thể (TikTok, YouTube, Facebook, Instagram)")
+# Gắn router cào thông số bài đăng đơn lẻ (WF-03 Post Metrics)
+from app.api.routers.post_metrics_router import (
+    SinglePostMetricsRequest,
+    router as post_metrics_router,
+    track_single_post_metrics,
+)
 
-
-@router.post("/post-metrics", summary="Cào thông số bài đăng đơn lẻ để theo dõi Campaign (Views, Likes, Comments, Shares)")
-async def track_single_post_metrics(req: SinglePostMetricsRequest):
-    """
-    Nhận link bài đăng bất kỳ của chiến dịch:
-    - Bóc tách tức thì views, likes, comments, shares, caption, thumbnail, thời gian đăng.
-    - Giúp Brand theo dõi kết quả campaign tự động mà không cần nhập thủ công.
-    """
-    from app.services.single_post_tracker_service import single_post_tracker
-    res = await asyncio.to_thread(single_post_tracker.fetch_post_metrics, req.post_url)
-    if res.get("status") == "error":
-        raise HTTPException(status_code=400, detail=res.get("message"))
-    return res
+router.include_router(post_metrics_router)
 
 
 

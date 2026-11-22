@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.logger import setup_logger
+from app.core.post_dates import normalize_post_date
 from app.core.metrics_tracker import metrics_tracker
 from app.crawlers.preflight_fetcher import fetch_tiktok_ssr_raw_data
 
@@ -217,14 +218,15 @@ def fetch_raw_creator_profile(
         if not item_list:
             item_list = ssr_data.get("itemList", [])
 
-        for item in item_list[:10]:
+        for item in item_list[:12]:
             pid = str(item.get("id", ""))
             desc = item.get("desc", "")
             pstats = item.get("stats", {}) or {}
             video_obj = item.get("video", {}) or {}
             cover_url = video_obj.get("cover") or video_obj.get("originCover") or ""
             create_time = item.get("createTime")
-            posted_at = datetime.fromtimestamp(int(create_time), tz=UTC).isoformat() if create_time else None
+            posted_at = normalize_post_date(create_time)
+            is_pinned = bool(item.get("isTop") or item.get("isPinned"))
 
             recent_posts.append({
                 "platformPostId": pid,
@@ -236,6 +238,7 @@ def fetch_raw_creator_profile(
                 "shares": int(pstats.get("shareCount", 0) or 0),
                 "coverUrl": cover_url,
                 "postedAt": posted_at,
+                "isPinned": is_pinned,
             })
 
         return profile_dict, recent_posts, None

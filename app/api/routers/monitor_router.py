@@ -1,4 +1,5 @@
 from typing import Any, Optional
+import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -10,6 +11,27 @@ from app.services.crawled_result_service import (
 )
 
 router = APIRouter(prefix="/api/v1/monitor", tags=["Crawl Monitor"])
+
+
+@router.get("/review-candidates", summary="Hồ sơ cần đối chiếu từ hàng chờ crawler")
+async def get_review_candidates(
+    limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    records, total = await asyncio.to_thread(staging_repo.list_review_candidates, limit, offset)
+    items = []
+    for record in records:
+        evidence = record.evidence_summary or {}
+        item = {
+            "status": "success", "platform": record.platform, "username": record.username,
+            "display_name": record.display_name, "author_id": record.external_id,
+            "profile_url": record.profile_url, "decision": record.decision.value,
+            "primary_type": record.primary_type, "reason_codes": record.reason_codes,
+            "followers": evidence.get("followers"), "collected_at": record.updated_at,
+        }
+        if isinstance(evidence.get("audit_posts"), list):
+            item["recent_posts"] = evidence["audit_posts"]
+        items.append(item)
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
 @router.get(

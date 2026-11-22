@@ -414,6 +414,18 @@ class CandidateStagingRepository:
             rows = cursor.fetchall()
             return [self._row_to_record(r) for r in rows], total
 
+    def list_review_candidates(self, limit: int = 100, offset: int = 0):
+        """Filter unresolved profiles before pagination, independently of the activity feed."""
+        with self._get_connection() as conn:
+            where = "decision IN (?, ?, ?) AND processing_status <> ?"
+            params = (Decision.NEEDS_MANAGER_REVIEW.value, Decision.SKIP_INSUFFICIENT.value,
+                      Decision.RETRY_PREFLIGHT.value, ProcessingStatus.INGESTED.value)
+            total = conn.execute(f"SELECT COUNT(*) FROM candidate_staging WHERE {where}", params).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT * FROM candidate_staging WHERE {where} ORDER BY updated_at DESC, id LIMIT ? OFFSET ?",
+                (*params, limit, offset)).fetchall()
+            return [self._row_to_record(row) for row in rows], total
+
     def get_candidate_by_identifier(
         self, identifier: str, platform: str | None = None
     ) -> CandidateStagingRecord | None:

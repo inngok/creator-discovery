@@ -431,8 +431,12 @@ def _fetch_stale_targets_from_pg(limit: int) -> list[dict]:
             """
             SELECT c.platform, c.user_name
             FROM creator c
-            LEFT JOIN public_creator_metric m ON c.id = m.creator_id
-            ORDER BY m.observed_at ASC NULLS FIRST
+            LEFT JOIN LATERAL (
+                SELECT observed_at, collected_at FROM public_creator_metric
+                WHERE creator_id=c.id ORDER BY collected_at DESC, id DESC LIMIT 1
+            ) m ON true
+            WHERE UPPER(c.platform) IN ('TIKTOK', 'FACEBOOK', 'INSTAGRAM')
+            ORDER BY COALESCE(m.observed_at, m.collected_at) ASC NULLS FIRST, c.id
             LIMIT %s;
             """,
             (max(limit * 4, limit),),

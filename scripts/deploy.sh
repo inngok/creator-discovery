@@ -25,10 +25,13 @@ if [[ "$(git rev-parse FETCH_HEAD)" != "$commit" ]]; then
   echo 'Branch has moved; run the workflow for its latest commit.' >&2
   exit 1
 fi
-# Fail before changing files if the VPS has divergent or newer commits.
-git merge-base --is-ancestor HEAD "$commit"
 previous_commit="$(git rev-parse HEAD)"
-git merge --ff-only "$commit"
+if git merge-base --is-ancestor HEAD "$commit" 2>/dev/null; then
+  git merge --ff-only "$commit"
+else
+  echo "Non-fast-forward update (history was rebased/force-pushed). Resetting HEAD to $commit (previous: $previous_commit)"
+  git reset --hard "$commit"
+fi
 echo "Deploying $commit (previous commit: $previous_commit)"
 venv/bin/python -m pip install -r requirements.txt
 venv/bin/python -m pip check

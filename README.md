@@ -1,5 +1,21 @@
 # InfluencerMatch Crawler API
 
+## Creator activity evidence
+
+Post dates are normalized to UTC from ISO timestamps or Unix seconds/milliseconds.
+Missing, relative, invalid, or future publication dates remain unknown; crawl time is
+never substituted for publication time. Facebook reads explicit article timestamps
+when available. Java ingestion orders dated posts newest first and retains unknown
+date evidence within the backend's three-post snapshot to prevent false inactivity
+warnings from pinned posts. Observation timestamps sent to Java are UTC.
+
+The existing daily refresh job still runs at 04:00 Asia/Ho_Chi_Minh. Its database
+selection uses each account's latest metric, including hidden accounts, and only
+queues supported platforms. Neither crawling nor refreshing changes manager visibility.
+Data Manager can also recrawl one account from the frontend activity panel.
+
+Focused verification: `python -m unittest tests.test_creator_activity_evidence tests.test_post_validation`.
+
 CI/CD (GitHub Actions, VPS systemd): [docs/CI_CD.md](docs/CI_CD.md).
 
 Hệ thống tự động cào dữ liệu KOC/KOL từ đa nền tảng (**TikTok, Facebook, YouTube**), tích hợp **AI Enrichment** (phân loại Category, Niche, CreatorType, Summary, Topic) và tự động chuẩn hóa gửi dữ liệu sang Java Backend.

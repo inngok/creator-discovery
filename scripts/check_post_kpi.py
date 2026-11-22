@@ -6,7 +6,6 @@ import sys
 # Đảm bảo đường dẫn import từ app
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.clients.java_client import java_client
 from app.services.single_post_tracker_service import single_post_tracker
 
 
@@ -16,7 +15,7 @@ def format_number(val):
     return f"{val:,}"
 
 
-def check_post_metrics(post_url: str, sync_java: bool = False):
+def check_post_metrics(post_url: str):
     print("\n" + "=" * 80)
     print("DANG CAO SO LIEU THUC TE (GROUND TRUTH)...")
     print(f"URL: {post_url}")
@@ -68,19 +67,10 @@ def check_post_metrics(post_url: str, sync_java: bool = False):
 
     print("-" * 75 + "\n")
 
-    if sync_java:
-        print("DANG DONG BO SO LIEU SANG JAVA BACKEND...")
-        success = java_client.send_post_metrics(result)
-        if success:
-            print("[THANH CONG] Da ban so lieu sang Java Backend de Java doi soat KPI va luu DB.")
-        else:
-            print("[THAT BAI] Khong the ban so lieu sang Java Backend (kiem tra connection / endpoint).")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tool kiem tra so lieu bai dang thuc te cho Java Backend")
     parser.add_argument("--url", type=str, required=True, help="Link bai dang TikTok, YouTube, Facebook, Instagram")
-    parser.add_argument("--sync-java", action="store_true", help="Ban payload so lieu sang Java Backend sau khi cao")
 
     args = parser.parse_args()
-    check_post_metrics(args.url, sync_java=args.sync_java)
+    check_post_metrics(args.url)

@@ -1,0 +1,90 @@
+YÊU CẦU RIÊNG CHO REPO AI — WF-03 POST METRICS
+
+Mục tiêu: bổ sung contract của POST /api/v1/crawl/post-metrics để BE phân biệt số 0 thực tế với dữ liệu thiếu. Giữ request hiện có {"post_url":"https://..."}. Không thêm nghiệp vụ nghiệm thu, thanh toán, đánh giá Creator hoặc xác minh quyền sở hữu vào crawler.
+
+1. Response thành công đề xuất (schemaVersion 1.1)
+{
+  "schemaVersion": "1.1",
+  "status": "success",
+  "platform": "TIKTOK",
+  "postUrl": "https://www.tiktok.com/@example/video/123?tracking=example",
+  "canonicalPostUrl": "https://www.tiktok.com/@example/video/123",
+  "postId": "123",
+  "author": {
+    "externalId": null,
+    "username": "example",
+    "displayName": "Example"
+  },
+  "metrics": {
+    "views": 1000,
+    "likes": 0,
+    "comments": null,
+    "shares": null,
+    "engagementRate": null
+  },
+  "metricStatus": {
+    "views": "AVAILABLE",
+    "likes": "AVAILABLE",
+    "comments": "FETCH_FAILED",
+    "shares": "NOT_SUPPORTED"
+  },
+  "metricErrors": {
+    "comments": {"code":"COUNTER_UNAVAILABLE","retryable":true}
+  },
+  "content": {
+    "caption": "Nội dung bài đăng",
+    "thumbnailUrl": null,
+    "postedAt": "2026-11-20T05:23:23Z"
+  },
+  "trackedAt": "2026-11-22T01:00:00Z",
+  "servedAt": "2026-11-22T01:02:00Z",
+  "collection": {
+    "source": "PUBLIC_PAGE",
+    "method": "SSR",
+    "cacheHit": true,
+    "scope": "LIFETIME_AT_COLLECTION",
+    "engagementRateFormula": null,
+    "engagementRateUnit": "PERCENT"
+  },
+  "warnings": ["COMMENTS_UNAVAILABLE"]
+}
+
+2. Quy tắc bắt buộc
+- Giữ postUrl là URL đầu vào (không âm thầm thay bằng URL một bài khác). canonicalPostUrl là URL chuẩn hóa riêng; postId phải là định danh thật từ nguồn.
+- metricStatus của từng views/likes/comments/shares thuộc AVAILABLE, NOT_SUPPORTED, NOT_AVAILABLE, FETCH_FAILED.
+- AVAILABLE: giá trị là số nguyên không âm; số 0 được chấp nhận nếu nguồn thực sự cung cấp 0. Không trả chuỗi '1.2K', số âm, NaN hoặc infinity. Giới hạn JSON integer an toàn 9007199254740991.
+- Các trạng thái khác: metric phải null, không dùng 0 hoặc dữ liệu mẫu. Nếu tất cả metric không AVAILABLE, trả lỗi NO_METRICS_AVAILABLE, không báo success giả.
+- trackedAt là thời điểm dữ liệu được lấy từ nguồn; dùng UTC ISO-8601 có timezone. Khi trả cache phải giữ trackedAt gốc, không thay bằng thời điểm phục vụ request. servedAt là thời điểm trả response.
+- postedAt/thumbnailUrl/author.externalId không biết thì null, không bịa ngày/ID, không dùng ảnh mock. postedAt không lấy từ ngày crawl.
+- externalId phải là ID tác giả ổn định khi nguồn cung cấp. Username/URL không tự chứng minh quyền sở hữu tài khoản hoặc quyền gửi nội dung.
+- Views và tương tác công khai là tổng số tại thời điểm lấy dữ liệu, không tự gán thành kết quả chỉ phát sinh trong Campaign hay kỳ đo Brand chọn.
+- Không tự suy ra clicks, revenue, GMV, conversions, demographics, KPI achievement hoặc quyền sở hữu bài đăng.
+- engagementRate phải kèm công thức và đơn vị. Nếu mẫu số hoặc thành phần cần thiết thiếu thì null, không xem metric thiếu bằng 0 để tính.
+- Bổ sung response_model và examples thành công, thiếu một phần, lỗi trong OpenAPI. Hiện schema response 200 đang trống.
+
+3. Lỗi
+Ví dụ HTTP 503:
+{"schemaVersion":"1.1","status":"error","error":{"code":"UPSTREAM_UNAVAILABLE","message":"Không lấy được dữ liệu bài đăng","retryable":true,"retryAfterSeconds":60},"trackedAt":null}
+Các code tối thiểu: INVALID_POST_URL, UNSUPPORTED_PLATFORM, POST_NOT_FOUND, POST_PRIVATE_OR_UNAVAILABLE, RATE_LIMITED, UPSTREAM_TIMEOUT, UPSTREAM_UNAVAILABLE, PARSE_FAILED, NO_METRICS_AVAILABLE.
+- Chọn HTTP status phù hợp (400/404/422/429/502/503/504). Không giả định 403 chắc chắn bài riêng tư; có thể nguồn chặn crawler.
+- Đặt giới hạn thời gian toàn bộ request để phù hợp timeout BE hiện tại 20 giây. Nếu cần job async, thống nhất contract mới với BE trước; không trả PENDING theo schema success hiện tại.
+- Không retry không giới hạn. Tôn trọng retryAfterSeconds, giới hạn concurrency và pacing.
+
+4. An toàn URL và dữ liệu
+- Chỉ chấp nhận URL bài đăng nền tảng hỗ trợ; chặn localhost, IP nội bộ, metadata endpoints, credential trong URL, port lạ và redirect sang host không hợp lệ.
+- Không trả cookie, access token, HTML thô, thông tin đăng nhập hoặc stack trace cho FE.
+- Endpoint chỉ đọc dữ liệu công khai, không tạo tài khoản, claim kênh hoặc chấp nhận lời mời.
+
+5. Tests cần có
+- TikTok/YouTube/Facebook/Instagram theo mức hỗ trợ thật; unsupported trả rõ, không cam kết hỗ trợ giả.
+- Counter 0 thực tế AVAILABLE khác với null FETCH_FAILED/NOT_SUPPORTED.
+- Một phần thiếu dữ liệu vẫn giữ chính xác các metric AVAILABLE.
+- Dữ liệu cache giữ nguyên trackedAt, đổi servedAt và cacheHit=true.
+- URL có tracking chuẩn hóa đúng nhưng vẫn giữ postUrl đầu vào; tác giả/postId không bị lấy nhầm.
+- Bài bị xóa/riêng tư/nguồn chặn/rate limit/timeout có mã lỗi và retryable chính xác.
+- Không âm thầm fallback sang số liệu seed hoặc giả.
+
+6. Phối hợp với BE–FE
+BE đã lưu snapshot từng lần lấy số liệu, kiểm tra publication, chống request lặp, giữ raw response riêng và không tự sửa outcome đã nghiệm thu.
+Adapter BE vẫn nhận response cũ: các số dương hợp lệ được đọc; số 0 chưa có availability được coi là chưa xác nhận. Adapter đã hỗ trợ metricStatus nêu trên để nhận cả số 0 hợp lệ khi AI bổ sung.
+Không tự gọi API nghiệm thu hoặc cập nhật lịch sử Recommendation từ repo AI.

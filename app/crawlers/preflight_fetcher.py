@@ -60,7 +60,7 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
                             author_name = author.get("uniqueId", "") if isinstance(author, dict) else ""
                             if author_name and author_name.casefold() != clean_user.casefold():
                                 continue
-                            if (item.get("id") and len(captured_posts) < 10
+                            if (item.get("id") and len(captured_posts) < 12
                                     and not any(str(p.get("id")) == str(item["id"]) for p in captured_posts)):
                                 captured_posts.append(item)
                 except Exception:
@@ -75,17 +75,15 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
             except Exception:
                 pass
 
-            # Cuộn xuống nhẹ để kích hoạt tải lazy video grid và gọi API post/item_list
-            try:
-                page.evaluate("window.scrollBy(0, 800);")
-            except Exception:
-                pass
-
-            # Chờ tối đa 3s để API post/item_list kịp phản hồi
-            for _ in range(6):
-                if len(captured_posts) >= 10:
+            # Cuộn xuống từng đợt để kích hoạt lazy-load các hàng video tiếp theo (tránh chỉ dừng ở 3 bài ghim đầu)
+            for _ in range(4):
+                if len(captured_posts) >= 12:
                     break
-                page.wait_for_timeout(500)
+                try:
+                    page.evaluate("window.scrollBy(0, 1500);")
+                except Exception:
+                    break
+                page.wait_for_timeout(600)
 
             content = page.content()
         except Exception as e:
@@ -106,15 +104,14 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
         logger.error(f"[PREFLIGHT] Lỗi parse JSON SSR cho @{clean_user}: {e}")
         return None
 
-    # Dự phòng bóc video trực tiếp từ DOM nếu API post/item_list chưa bắt được
-    # Preserve SSR posts and supplement partial API responses with owned DOM cards.
+    # Dự phòng bóc video trực tiếp từ DOM nếu API post/item_list chưa bắt đủ
     ssr_posts = data.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("itemList", []) or data.get("itemList", [])
     for item in ssr_posts:
         if item.get("id") and not any(str(p.get("id")) == str(item["id"]) for p in captured_posts):
             captured_posts.append(item)
-    if len(captured_posts) < 10:
+    if len(captured_posts) < 12:
         for a in soup.select("a[href*='/video/'], a[href*='/photo/']"):
-            if len(captured_posts) >= 10:
+            if len(captured_posts) >= 12:
                 break
             href = a.get("href", "")
             if not re.search(r"/@" + re.escape(clean_user) + r"/(?:video|photo)/", href, re.IGNORECASE):
@@ -126,11 +123,14 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
             pattern = "/video/" if "/video/" in href else "/photo/"
             pid = href.split(pattern)[-1].split("?")[0] if pattern in href else ""
             if pid and not any(str(p.get("id")) == pid for p in captured_posts):
+                parent_text = a.parent.get_text(strip=True) if a.parent else ""
+                is_pinned = "Ghim" in text or "Pinned" in text or "Ghim" in parent_text or "Pinned" in parent_text
                 captured_posts.append({
                     "id": pid,
                     "desc": desc,
                     "stats": {"playCount": 0, "diggCount": 0, "commentCount": 0, "shareCount": 0},
                     "video": {"cover": img.get("src", "") if img else ""},
+                    "isPinned": is_pinned,
                 })
 
     if captured_posts:

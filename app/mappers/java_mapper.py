@@ -1,4 +1,6 @@
 import re
+from datetime import UTC
+from app.core.post_dates import post_evidence_order
 from app.ai.services.embedding_service import embedding_service
 from app.core.confidence import compute_data_confidence
 from app.core.fee_benchmark import get_estimated_fee
@@ -11,7 +13,7 @@ class JavaMapper:
     def from_ingest_payload(result: IngestPayload) -> dict:
         recent_posts_list = []
         valid_captions = []
-        for p in result.recentPosts:
+        for p in sorted(result.recentPosts, key=post_evidence_order, reverse=True):
             recent_posts_list.append(
                 {
                     "platformPostId": p.platformPostId,
@@ -106,7 +108,9 @@ class JavaMapper:
             "freshnessStatus": "FRESH",
             "dataConfidence": data_confidence,
             "crawlRunId": getattr(result, "crawlRunId", ""),
-            "observedAt": result.observedAt.strftime("%Y-%m-%dT%H:%M:%S") if hasattr(result, "observedAt") and result.observedAt else None,
+            "observedAt": (result.observedAt.replace(tzinfo=UTC) if result.observedAt.tzinfo is None
+                           else result.observedAt.astimezone(UTC)).strftime("%Y-%m-%dT%H:%M:%S")
+                          if result.observedAt else None,
             "isStableExternalId": getattr(result.creator, "isStableExternalId", True),
             "bioCrossLinks": getattr(result.creator, "bioCrossLinks", []),
             "sourceType": "PUBLIC",

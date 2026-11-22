@@ -19,6 +19,7 @@ from playwright.sync_api import (
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
+from app.core.post_dates import normalize_post_date
 from app.core.models import CreatorInfo, IngestPayload, Platform, Post
 
 logger = setup_logger("tiktok_crawler")
@@ -84,7 +85,7 @@ def _setup_network_interception(page: Page, username: str) -> list[Post]:
                 body = json.loads(text)
                 itemList = body.get("itemList", [])
                 for v in itemList:
-                    if len(recent_posts) >= 10:
+                    if len(recent_posts) >= 12:
                         break
                     post_id = str(v.get("id", ""))
                     author = v.get("author") or {}
@@ -97,10 +98,7 @@ def _setup_network_interception(page: Page, username: str) -> list[Post]:
                     title = v.get("desc", "")
 
                     create_time = v.get("createTime")
-                    posted_at = None
-                    if create_time:
-                        dt = datetime.fromtimestamp(int(create_time), tz=UTC)
-                        posted_at = dt.isoformat()
+                    posted_at = normalize_post_date(create_time)
 
                     stats = v.get("stats", {})
                     recent_posts.append(
@@ -242,19 +240,19 @@ def _crawl_tiktok_profile_sync(username: str) -> IngestPayload | None:
                 )
 
             # Scroll để trigger fetch list video API
-            for _ in range(3):
-                if len(recent_posts) >= 10:
+            for _ in range(5):
+                if len(recent_posts) >= 12:
                     break
-                scroll_amount = random.randint(800, 1500)
+                scroll_amount = random.randint(1000, 1800)
                 page.evaluate(f"window.scrollBy(0, {scroll_amount});")
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(1000)
 
             # Dự phòng bóc trực tiếp từ DOM nếu network interception chưa kịp lấy
-            if len(recent_posts) < 10:
+            if len(recent_posts) < 12:
                 content = page.content()
                 soup = BeautifulSoup(content, "html.parser")
                 for a in soup.select("a[href*='/video/']"):
-                    if len(recent_posts) >= 10:
+                    if len(recent_posts) >= 12:
                         break
                     href = a.get("href", "")
                     if not re.search(r"/@" + re.escape(username) + r"/video/", href, re.IGNORECASE):

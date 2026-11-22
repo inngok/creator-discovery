@@ -2,7 +2,8 @@ from datetime import UTC, datetime
 from enum import Enum
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from app.core.post_dates import normalize_post_date
 
 
 class Platform(str, Enum):
@@ -40,6 +41,11 @@ class Post(BaseModel):
     shares: int | None = 0
     coverUrl: str | None = ""
     postedAt: str | None = None
+
+    @field_validator("postedAt", mode="before")
+    @classmethod
+    def normalize_publication_date(cls, value):
+        return normalize_post_date(value)
 
 
 class AIEnrichment(BaseModel):

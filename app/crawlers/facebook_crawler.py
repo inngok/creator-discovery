@@ -56,89 +56,9 @@ def clean_facebook_username(username: str) -> str:
     return username.strip().rstrip("/")
 
 
-_FB_AUTH_COOKIES = {"c_user", "xs"}
-
-
-def is_facebook_session_valid(state_path: str | None = None) -> bool:
-    """Kiểm tra nhanh xem session Facebook còn hợp lệ (có auth cookie) không."""
-    import datetime
-    path = state_path or os.path.join("data", "playwright_fb_state.json")
-    if not os.path.exists(path):
-        return False
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        cookies = {c["name"]: c for c in state.get("cookies", [])}
-        now = datetime.datetime.now().timestamp()
-        for name in _FB_AUTH_COOKIES:
-            c = cookies.get(name)
-            if not c:
-                return False
-            # Nếu cookie có expires và đã hết hạn thì coi là hết
-            if c.get("expires", -1) > 0 and c["expires"] < now:
-                return False
-        return True
-    except Exception:
-        return False
-
-
-def _init_facebook_playwright_context(p) -> tuple[BrowserContext, str]:
-    """Khởi tạo context Playwright cho Facebook với Anti-bot và nạp Cookie chuẩn hóa."""
-    browser = p.chromium.launch(
-        headless=True,
-        args=[
-            "--disable-gpu",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    )
-
-    state_path = os.path.join("data", "playwright_fb_state.json")
-    context_args = {
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "viewport": {"width": 1280, "height": 800},
-        "locale": "vi-VN",
-    }
-    if os.path.exists(state_path):
-        context_args["storage_state"] = state_path
-
-    context = browser.new_context(**context_args)
-
-    # Nạp cookies từ data/facebook_cookies.json nếu có
-    cookie_path = os.path.join("data", "facebook_cookies.json")
-    if os.path.exists(cookie_path) and not os.path.exists(state_path):
-        try:
-            with open(cookie_path, "r", encoding="utf-8") as f:
-                raw_cookies = json.load(f)
-                if isinstance(raw_cookies, dict) and "cookies" in raw_cookies:
-                    raw_cookies = raw_cookies["cookies"]
-                valid_cookies = []
-                for c in raw_cookies:
-                    if not isinstance(c, dict) or "name" not in c or "value" not in c:
-                        continue
-                    cookie_obj = {
-                        "name": str(c["name"]),
-                        "value": str(c["value"]),
-                        "domain": str(c.get("domain", ".facebook.com")),
-                        "path": str(c.get("path", "/")),
-                    }
-                    same_site = str(c.get("sameSite", "")).capitalize()
-                    if same_site in ["Strict", "Lax", "None"]:
-                        cookie_obj["sameSite"] = same_site
-                    if "secure" in c:
-                        cookie_obj["secure"] = bool(c["secure"])
-                    if "httpOnly" in c:
-                        cookie_obj["httpOnly"] = bool(c["httpOnly"])
-                    valid_cookies.append(cookie_obj)
-
-                if valid_cookies:
-                    context.add_cookies(valid_cookies)
-                    logger.info(f"[Facebook Crawler] Đã nạp thành công {len(valid_cookies)} cookies từ {cookie_path}")
-        except Exception as e:
-            logger.warning(f"[Facebook Crawler] Lỗi nạp cookies từ {cookie_path}: {e}")
-
-    return context, state_path
+def _init_facebook_playwright_context(p) -> tuple[BrowserContext, None]:
+    from app.crawlers.public_browser import create_public_context
+    return create_public_context(p, "FACEBOOK"), None
 
 
 def dismiss_facebook_dialogs(page: Page) -> None:
@@ -313,6 +233,7 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
             og_desc = soup.find("meta", property="og:description")
             meta_desc = soup.find("meta", attrs={"name": "description"})
             og_image = soup.find("meta", property="og:image")
+            avatar_url = og_image.get("content") if og_image else None
 
             page_title = soup.title.text if soup.title else clean_slug
             display_name = (
@@ -375,8 +296,25 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
 
             # 4. Bóc tách bài viết gần nhất qua hàm modular
             recent_posts = extract_facebook_posts(soup, clean_slug, max_posts=8)
+            from app.crawlers.meta_public_data import facebook_structured_posts, fetch_facebook_public_html
+            structured_posts = facebook_structured_posts(soup, clean_slug)
+            if len(structured_posts) < 3:
+                try:
+                    public_soup = fetch_facebook_public_html(clean_slug)
+                    if public_soup is not None:
+                        structured_posts = list({p.platformPostId: p for p in [
+                            *structured_posts, *facebook_structured_posts(public_soup, clean_slug)]}.values())
+                except Exception as error:
+                    logger.warning("[Facebook Crawler] Public HTML unavailable: %s", type(error).__name__)
+            if structured_posts:
+                recent_posts = structured_posts[:12]
+            if not recent_posts and "m_soup" in locals():
+                recent_posts = extract_facebook_posts(m_soup, clean_slug, max_posts=8)
 
-            avatar_url = og_image.get("content") if og_image else None
+            if followers == 0 and not recent_posts:
+                logger.warning("[Facebook Crawler] No follower or post evidence; refusing an empty profile.")
+                return None
+
             cross_links = re.findall(r"https?://[^\s\"'>]+", clean_bio) if clean_bio else []
 
             creator_info = CreatorInfo(
@@ -393,14 +331,6 @@ def _crawl_facebook_profile_sync(username: str) -> Optional[IngestPayload]:
                 publicPhone=public_phone,
                 bioCrossLinks=cross_links,
             )
-
-            # Lưu lại trạng thái trình duyệt
-            try:
-                if not os.path.exists("data"):
-                    os.makedirs("data")
-                context.storage_state(path=state_path)
-            except Exception:
-                pass
 
         except Exception as e:
             logger.error(f"[Facebook Crawler] Lỗi khi cào trang {clean_slug}: {e}")

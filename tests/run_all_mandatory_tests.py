@@ -8,10 +8,10 @@ os.environ["TESTING"] = "1"
 
 sys.path.insert(0, os.path.abspath("."))
 
-from tests.test_rule_engine import TestRuleEngine
-from tests.test_preflight_staging import TestPreflightAndStaging
-from tests.test_celery_gates import TestCeleryGatesAndPipeline
-from tests.test_post_validation import TestPostValidationAndSafeIngestion
+from tests.mandatory.test_rule_engine import TestRuleEngine
+from tests.mandatory.test_preflight_staging import TestPreflightAndStaging
+from tests.mandatory.test_celery_gates import TestCeleryGatesAndPipeline
+from tests.mandatory.test_post_validation import TestPostValidationAndSafeIngestion
 
 
 MANDATORY_TEST_CASES = [

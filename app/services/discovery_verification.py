@@ -25,9 +25,15 @@ def verify_discovery_profile(candidate: dict) -> bool:
     if error or not profile:
         logger.info("[DISCOVERY DROP] %s @%s: PROFILE_UNAVAILABLE", platform, username)
         return False
-    if platform == "TIKTOK" and profile["unique_id"].casefold() != username.casefold():
+    if platform in {"TIKTOK", "INSTAGRAM"} and profile["unique_id"].lstrip("@").casefold() != username.casefold():
         logger.warning("[DISCOVERY DROP] @%s: PROFILE_IDENTITY_MISMATCH", username)
         return False
+    if platform in {"FACEBOOK", "INSTAGRAM"}:
+        from app.core.vietnam_evidence import vietnam_market_evidence
+        candidate["market_check"] = vietnam_market_evidence(profile, posts)
+        if not candidate["market_check"]["matches"]:
+            logger.info("[DISCOVERY DROP] %s @%s: %s", platform, username, candidate["market_check"]["reasons"])
+            return False
     unique_posts = {p["platformPostId"]: p for p in posts
                     if p.get("platformPostId") and p.get("caption", "").strip()}
     previews = [PostPreview(post_id=pid, caption=p["caption"]) for pid, p in unique_posts.items()]

@@ -54,19 +54,28 @@ class CategoryDiscoveryService:
         if not terms:
             return []
         candidates = []
-        if target in {"TIKTOK", "ALL", "BOTH"}:
-            candidates.extend(search_new_tiktok_candidates(
-                keywords=terms, max_per_keyword=limit, max_total=limit,
-                requested_category=category_code))
-        remaining = limit - len(candidates)
-        if remaining > 0 and target in {"FACEBOOK", "ALL", "BOTH"}:
-            candidates.extend(search_new_facebook_candidates(
-                keywords=terms, max_per_keyword=remaining, max_total=remaining,
-                requested_category=category_code))
-        remaining = limit - len(candidates)
-        if remaining > 0 and target in {"INSTAGRAM", "ALL", "BOTH"}:
-            candidates.extend(search_new_instagram_candidates(
-                keywords=terms, max_per_keyword=remaining, max_total=remaining))
+        errors = []
+        runners = {"TIKTOK": search_new_tiktok_candidates,
+                   "FACEBOOK": search_new_facebook_candidates,
+                   "INSTAGRAM": search_new_instagram_candidates}
+        for name, runner in runners.items():
+            remaining = limit - len(candidates)
+            if remaining <= 0:
+                break
+            if target not in {name, "ALL", "BOTH"}:
+                continue
+            try:
+                kwargs = dict(keywords=terms, max_per_keyword=remaining, max_total=remaining)
+                kwargs["requested_category"] = category_code
+                candidates.extend(runner(**kwargs))
+            except Exception as error:
+                if target not in {"ALL", "BOTH"}:
+                    raise
+                errors.append(error)
+                logger.warning("Discovery %s failed; continuing other platforms: %s", name, error)
+        if errors and not candidates:
+            from app.crawlers.tiktok_discovery import TikTokDiscoveryError
+            raise TikTokDiscoveryError("Discovery unavailable: " + "; ".join(str(e) for e in errors))
         return candidates[:limit]
 
 

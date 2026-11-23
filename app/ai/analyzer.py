@@ -124,55 +124,6 @@ def _predict_category(text: str) -> PredictionResult:
         )
 
 
-def extract_creator_features(
-    creator_info: CreatorInfo, recent_posts: list[Post], text_combined: str
-) -> np.ndarray:
-    """Trích xuất Semantic Features (384-d) + Behavioral Features (7-d)"""
-    X_text = embedding_service.get_embedding(text_combined)
-    X_text_array = np.array(X_text).flatten()
-
-    # Behavioral signals
-    log_followers = np.log1p(creator_info.followers)
-    eng_rates = []
-    promo_count = review_count = cta_count = brand_mention_count = 0
-
-    promo_kws = ["sponsorship", "pr", "affiliate", "quảng cáo", "tài trợ"]
-    review_kws = ["review", "đánh giá", "trên tay", "dùng thử", "trải nghiệm"]
-    cta_kws = ["link", "bio", "giỏ hàng", "mua", "order", "inbox"]
-
-    for p in recent_posts:
-        views = p.views or 1
-        eng = (p.likes or 0) + (p.comments or 0) + (p.shares or 0)
-        eng_rates.append(eng / views if views > 0 else 0)
-
-        cap = (p.caption or "").lower()
-        if any(kw in cap for kw in promo_kws):
-            promo_count += 1
-        if any(kw in cap for kw in review_kws):
-            review_count += 1
-        if any(kw in cap for kw in cta_kws):
-            cta_count += 1
-        if "@" in cap or "#" in cap:
-            brand_mention_count += 1
-
-    avg_eng = np.mean(eng_rates) if eng_rates else 0.0
-    n_posts = len(recent_posts) or 1
-
-    numerical_features = np.array(
-        [
-            log_followers,
-            avg_eng,
-            promo_count / n_posts,
-            review_count / n_posts,
-            cta_count / n_posts,
-            brand_mention_count / n_posts,
-            0.5,  # content_diversity (mock score)
-        ]
-    )
-
-    return np.concatenate([X_text_array, numerical_features])
-
-
 def _predict_creator_type(
     creator_info: CreatorInfo, recent_posts: list[Post], text_combined: str
 ) -> str:

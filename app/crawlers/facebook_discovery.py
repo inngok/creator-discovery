@@ -27,12 +27,7 @@ def search_new_facebook_candidates(
     Trả về danh sách dict chứa: {username, display_name, followers, bio_snippet, profile_url, platform}
     """
     # Kiểm tra session sớm để tránh mở browser rồi mới fail
-    from app.crawlers.facebook_crawler import is_facebook_session_valid
-    if not is_facebook_session_valid():
-        raise FacebookDiscoveryError(
-            "Session Facebook hết hạn hoặc chưa đăng nhập. "
-            "Chạy 'python scripts/refresh_sessions.py --platform facebook' trên máy chủ để làm mới."
-        )
+    logger.info("Facebook discovery uses anonymous public pages.")
     discovered: list[dict] = []
     seen_usernames = set()
 
@@ -93,7 +88,7 @@ def search_new_facebook_candidates(
                             f"Facebook từ chối trang tìm kiếm (HTTP {response.status}). Không thể tìm kênh theo từ khóa; kiểm tra kết nối Facebook hoặc nhập URL kênh cụ thể.")
                     page.wait_for_timeout(3500)
                     if any(part in page.url for part in ("/login", "/checkpoint")):
-                        raise FacebookDiscoveryError("Facebook yêu cầu đăng nhập để tìm kiếm. Cần kết nối lại tài khoản Facebook cho dịch vụ thu thập.")
+                        raise FacebookDiscoveryError("Facebook không cho khách chưa đăng nhập xem nguồn này. Thử URL profile công khai hoặc thử lại sau.")
                     dismiss_facebook_dialogs(page)
 
                     extractor = (extract_facebook_hashtag_candidates if is_hashtag

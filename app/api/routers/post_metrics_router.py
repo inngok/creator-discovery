@@ -6,15 +6,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.post_metrics_models import (
-    OPENAPI_EXAMPLE_ERROR_400,
-    OPENAPI_EXAMPLE_ERROR_404,
-    OPENAPI_EXAMPLE_ERROR_422,
-    OPENAPI_EXAMPLE_ERROR_429,
-    OPENAPI_EXAMPLE_ERROR_502,
-    OPENAPI_EXAMPLE_ERROR_503,
-    OPENAPI_EXAMPLE_ERROR_504,
-    OPENAPI_EXAMPLE_PARTIAL_MISSING,
-    OPENAPI_EXAMPLE_SUCCESS_COMPLETE,
     PostMetricsErrorResponse,
     PostMetricsSuccessResponse,
 )
@@ -48,55 +39,34 @@ class SinglePostMetricsRequest(BaseModel):
         200: {
             "model": PostMetricsSuccessResponse,
             "description": "Bóc tách thành công thông số bài đăng (Schema 1.1)",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "success_complete": {
-                            "summary": "TikTok đầy đủ thông số",
-                            "value": OPENAPI_EXAMPLE_SUCCESS_COMPLETE,
-                        },
-                        "partial_missing": {
-                            "summary": "Số 0 hợp lệ và một phần metric bị thiếu/không hỗ trợ",
-                            "value": OPENAPI_EXAMPLE_PARTIAL_MISSING,
-                        },
-                    }
-                }
-            },
         },
         400: {
             "model": PostMetricsErrorResponse,
             "description": "URL không hợp lệ hoặc vi phạm an toàn SSRF",
-            "content": {"application/json": {"example": OPENAPI_EXAMPLE_ERROR_400}},
         },
         404: {
             "model": PostMetricsErrorResponse,
             "description": "Bài viết không tồn tại hoặc đã bị xóa/riêng tư",
-            "content": {"application/json": {"example": OPENAPI_EXAMPLE_ERROR_404}},
         },
         422: {
             "model": PostMetricsErrorResponse,
             "description": "Nền tảng không được hỗ trợ",
-            "content": {"application/json": {"example": OPENAPI_EXAMPLE_ERROR_422}},
         },
         429: {
             "model": PostMetricsErrorResponse,
             "description": "Bị giới hạn tần suất (Rate limit) từ upstream",
-            "content": {"application/json": {"example": OPENAPI_EXAMPLE_ERROR_429}},
         },
         502: {
             "model": PostMetricsErrorResponse,
             "description": "Lỗi phân tích cú pháp hoặc không có metric nào khả dụng",
-            "content": {"application/json": {"example": OPENAPI_EXAMPLE_ERROR_502}},
         },
         503: {
             "model": PostMetricsErrorResponse,
             "description": "Nguồn upstream không khả dụng hoặc bị chặn",
-            "content": {"application/json": {"example": OPENAPI_EXAMPLE_ERROR_503}},
         },
         504: {
             "model": PostMetricsErrorResponse,
             "description": "Timeout khi cào dữ liệu từ nguồn upstream",
-            "content": {"application/json": {"example": OPENAPI_EXAMPLE_ERROR_504}},
         },
     },
 )

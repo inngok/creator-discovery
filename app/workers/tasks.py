@@ -174,6 +174,18 @@ def _execute_deep_crawl(
             raise task_self.retry(countdown=retry_countdown)
 
         # 🛡️ GUARD 2: POST-CRAWL VALIDATION GUARD
+        if plat in {"FACEBOOK", "INSTAGRAM"}:
+            from app.core.vietnam_evidence import vietnam_market_evidence
+            market_check = vietnam_market_evidence(
+                {"bio": result.creator.bio},
+                [p.model_dump() for p in result.recentPosts])
+            if not market_check["matches"]:
+                staging_repo.update_status_and_decision(
+                    platform=plat, username=clean_user, status=ProcessingStatus.FAILED,
+                    decision=Decision.SKIP_INSUFFICIENT, reason_codes=market_check["reasons"])
+                return {"status": "INCOMPLETE", "reason": "VIETNAM_MARKET_NOT_VERIFIED",
+                        "username": clean_user, "market_check": market_check}
+
         post_val = validate_post_crawl(result, is_refresh=is_refresh)
         if not post_val.is_valid:
             incomplete = post_val.quarantine_reason in {

@@ -41,7 +41,11 @@ def is_redis_available() -> bool:
 
 def _dispatch_enqueue(platform: str, username: str, force_deep_crawl: bool = False) -> dict:
     plat = (platform or "TIKTOK").upper()
-    clean_user = username.removeprefix("@").strip()
+    from app.core.profile_identifiers import normalize_profile_identifier
+    try:
+        clean_user = normalize_profile_identifier(plat, username)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if not clean_user:
         raise HTTPException(status_code=400, detail="Username không được để trống")
 
@@ -311,6 +315,32 @@ class BatchCrawlRequest(BaseModel):
     max_channels: int = Field(default=5, ge=1, le=20, description="Số lượng kênh tối đa cào trong 1 lượt")
 
 
+class CollectProfileRequest(BaseModel):
+    platform: str = "TIKTOK"
+    username: str = Field(min_length=1, max_length=500)
+    allow_cached: bool = False
+    max_age_hours: int = Field(default=168, ge=1, le=720)
+
+
+@router.get("/connections", summary="Check public collection mode for all platforms")
+async def collection_connections() -> dict:
+    from app.services.collection_service import PLATFORMS, session_status
+    return {"connections": [session_status(platform) for platform in PLATFORMS],
+            "note": "Public access only; saved login sessions are not used. Use /collect to test remote availability."}
+
+
+@router.post("/collect", summary="Collect a profile with explicit snapshot fallback")
+async def collect_profile_endpoint(req: CollectProfileRequest) -> dict:
+    from app.services.collection_service import collect_profile
+    try:
+        result = await collect_profile(req.platform, req.username, req.allow_cached, req.max_age_hours)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if result["status"] == "error":
+        raise HTTPException(status_code=502, detail=result)
+    return result
+
+
 @router.post(
     "/test-scrape",
     summary="Cào thử nghiệm 1 KOC thời gian thực (Test Scrape)",
@@ -345,13 +375,13 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
                 })
 
     # 2. Nếu người dùng chọn theo ngành nghề (Taxonomy)
-    elif req.category:
+    elif req.category or req.keywords:
         from app.crawlers.discovery_crawler import (
             FacebookDiscoveryError, TikTokDiscoveryError, InstagramDiscoveryError,
         )
         try:
             target_candidates = await asyncio.to_thread(
-                category_discovery_service.get_candidates_by_category, req.category,
+                category_discovery_service.get_candidates_by_category, req.category or " ".join(req.keywords),
                 keywords=req.keywords,
                 limit=req.max_channels,
                 platform=req.platform.upper(),
@@ -365,7 +395,7 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
             raise HTTPException(status_code=422, detail="Không tìm được kênh Facebook phù hợp với từ khóa. Facebook có thể yêu cầu đăng nhập; hãy kiểm tra kết nối hoặc thử nhập URL kênh cụ thể.")
         if plat_up == "INSTAGRAM":
             raise HTTPException(status_code=422, detail="Không tìm được kênh Instagram phù hợp với từ khóa. Hãy thử từ khóa tiếng Anh hoặc nhập URL kênh cụ thể.")
-        if req.category and not req.usernames:
+        if (req.category or req.keywords) and not req.usernames:
             raise HTTPException(status_code=422, detail="Đã kiểm tra nguồn tìm nhưng chưa có tài khoản mới đủ điều kiện và đúng chủ đề. Không lấy tài khoản sai ngành để bù số lượng.")
         raise HTTPException(status_code=400, detail="Vui lòng chọn ngành nghề hợp lệ hoặc nhập ít nhất 1 username/link để cào.")
 
@@ -378,11 +408,16 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         c_plat = c.get("platform", req.platform.upper())
         if c_plat == "ALL":
             c_plat = "TIKTOK"
-        if c.get("_verified_snapshot"):
-            res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat,
-                                          verified_snapshot=c["_verified_snapshot"])
-        else:
-            res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat)
+        try:
+            if c.get("_verified_snapshot"):
+                res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat,
+                                              verified_snapshot=c["_verified_snapshot"])
+            else:
+                res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat)
+        except Exception as error:
+            logger.warning("Batch profile failed (%s): %s", c_plat, type(error).__name__)
+            res = {"status": "error", "platform": c_plat, "username": c["username"],
+                   "error": "Không lấy được dữ liệu công khai. Nguồn có thể đang chặn truy cập; thử lại sau."}
         if res.get("status") == "success":
             success_count += 1
             total_latency += res.get("latency_ms", 0.0)
@@ -397,11 +432,11 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         "category": req.category,
         "platform": req.platform.upper(),
         "summary": {
-            "total_requested": (req.max_channels if req.category and not req.usernames
+            "total_requested": (req.max_channels if (req.category or req.keywords) and not req.usernames
                                 else len(target_candidates)),
             "attempted_count": len(target_candidates),
             "discovery_shortfall": (max(0, req.max_channels - len(target_candidates))
-                                    if req.category and not req.usernames else 0),
+                                    if (req.category or req.keywords) and not req.usernames else 0),
             "success_count": success_count,
             "failed_count": failed_count,
             "avg_latency_ms": avg_latency,

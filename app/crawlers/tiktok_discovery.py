@@ -77,69 +77,18 @@ def _verify_tiktok_candidate_followers(candidate: dict) -> bool:
     return verify_discovery_profile(candidate)
 
 
-_WAF_COOKIE_NAMES = {"waforiginalreid", "waforigin_id", "_waftokenid", "last_visited_page"}
-
-
-def _strip_expired_waf_cookies(state_path: str) -> None:
-    """Xoá các WAF cookie hết hạn khỏi state file để Playwright tự lấy lại khi warm-up."""
-    import datetime
-    if not os.path.exists(state_path):
-        return
+def _init_discovery_context(p):
+    from app.crawlers.public_browser import create_public_context
+    context = create_public_context(p, "TIKTOK")
+    page = context.new_page()
     try:
-        import json as _json
-        with open(state_path, "r", encoding="utf-8") as f:
-            state = _json.load(f)
-        now = datetime.datetime.now().timestamp()
-        original = state.get("cookies", [])
-        cleaned = [
-            c for c in original
-            if not (c.get("name") in _WAF_COOKIE_NAMES and 0 < c.get("expires", -1) < now)
-        ]
-        if len(cleaned) != len(original):
-            state["cookies"] = cleaned
-            with open(state_path, "w", encoding="utf-8") as f:
-                _json.dump(state, f)
-            logger.info("[DISCOVERY] Đã xoá %d WAF cookie hết hạn khỏi session.", len(original) - len(cleaned))
-    except Exception as e:
-        logger.warning("[DISCOVERY] Không thể dọn WAF cookie: %s", e)
-
-
-def _warmup_tiktok(context, state_path: str) -> None:
-    """Ghé thăm homepage để TikTok cấp WAF cookie tươi, rồi lưu lại state."""
-    try:
-        import json as _json
-        page = context.new_page()
         page.goto("https://www.tiktok.com/", wait_until="domcontentloaded", timeout=20000)
         page.wait_for_timeout(2000)
+    except Exception as error:
+        logger.warning("Public TikTok warm-up failed: %s", type(error).__name__)
+    finally:
         page.close()
-        context.storage_state(path=state_path)
-        logger.info("[DISCOVERY] Warm-up TikTok homepage xong, đã lưu WAF cookie mới.")
-    except Exception as e:
-        logger.warning("[DISCOVERY] Warm-up TikTok không thành công (tiếp tục): %s", e)
-
-
-def _init_discovery_context(p):
-    browser = p.chromium.launch(
-        headless=True,
-        args=[
-            "--disable-gpu",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    )
-    state_path = os.path.join("data", "playwright_state.json")
-    _strip_expired_waf_cookies(state_path)
-    context_args = {
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "viewport": {"width": 1280, "height": 720},
-    }
-    if os.path.exists(state_path):
-        context_args["storage_state"] = state_path
-
-    context = browser.new_context(**context_args)
-    _warmup_tiktok(context, state_path)
-    return browser, context
+    return context.browser, context
 
 
 def _ensure_search_available(page, response):
@@ -151,7 +100,66 @@ def _ensure_search_available(page, response):
         "something went wrong", "verify to continue", "complete the captcha",
         "sorry, something wrong with the server",
     )):
-        raise TikTokDiscoveryError("TikTok không trả kết quả tìm kiếm hoặc yêu cầu xác minh. Thử kết nối lại trước khi cào.")
+        raise TikTokDiscoveryError("TikTok không trả kết quả công khai hoặc yêu cầu xác minh. Sẽ thử nguồn tìm kiếm dự phòng.")
+
+
+def _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requested_category):
+    """Search indexes provide leads only; verify every lead against its live profile."""
+    from app.services.crawled_result_service import get_crawled_tiktok_identifiers
+    found = []
+    seen = get_crawled_tiktok_identifiers()
+    checked = 0
+    budget = min(max_total * 3, 30)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            for keyword in keywords:
+                count = 0
+                query = urllib.parse.quote(f'site:tiktok.com/@ "{keyword}"')
+                for url in (f"https://www.google.com/search?q={query}&num=20",
+                            f"https://html.duckduckgo.com/html/?q={query}"):
+                    try:
+                        response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                        if response and response.status >= 400:
+                            continue
+                        soup = BeautifulSoup(page.content(), "html.parser")
+                        for anchor in soup.select("a[href]"):
+                            href = urllib.parse.unquote(anchor.get("href", ""))
+                            match = re.search(r"https?://(?:www\.)?tiktok\.com/@([\w.]+)(?:[/?&#]|$)", href)
+                            if not match:
+                                continue
+                            username = match.group(1)
+                            key = username.casefold()
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            if checked >= budget:
+                                return found
+                            candidate = {"username": username, "platform": "TIKTOK",
+                                         "profile_url": f"https://www.tiktok.com/@{username}",
+                                         "search_keyword": keyword, "requested_category": requested_category,
+                                         "source": "SEARCH_INDEX_LIVE_VERIFIED"}
+                            checked += 1
+                            if not _run_profile_check(_verify_tiktok_candidate_followers, candidate):
+                                continue
+                            if not _trending_matches_topic(candidate, f"{requested_category or ''}; {keyword}"):
+                                continue
+                            if not evaluate_tier0_search_card(candidate)[0]:
+                                continue
+                            found.append(candidate)
+                            count += 1
+                            if len(found) >= max_total:
+                                return found
+                            if count >= max_per_keyword:
+                                break
+                    except Exception as error:
+                        logger.warning("TikTok indexed search failed: %s", type(error).__name__)
+                    if count >= max_per_keyword:
+                        break
+        finally:
+            browser.close()
+    return found
 
 
 def search_new_tiktok_candidates(
@@ -256,5 +264,11 @@ def search_new_tiktok_candidates(
             logger.error(f"[DISCOVERY] Lỗi khởi tạo Playwright Discovery: {e}")
 
     if not discovered and search_errors and not search_source_available:
+        try:
+            recovered = _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requested_category)
+            if recovered:
+                return recovered
+        except Exception as error:
+            logger.warning("TikTok indexed fallback unavailable: %s", type(error).__name__)
         raise TikTokDiscoveryError("TikTok search and verified topic discovery failed: " + "; ".join(search_errors[:5]))
     return discovered

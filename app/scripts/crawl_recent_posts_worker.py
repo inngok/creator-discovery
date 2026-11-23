@@ -366,12 +366,6 @@ def run_worker(limit: int = 50, delay_min: float = 4.0, delay_max: float = 7.0, 
                     logger.error("[!] Tự động dừng cào để tránh bị TikTok blacklist IP.")
                     break
 
-            # Cập nhật session định kỳ
-            try:
-                context.storage_state(path=state_path)
-            except Exception:
-                pass
-
             sleep_sec = random.uniform(delay_min, delay_max)
             time.sleep(sleep_sec)
 

@@ -77,6 +77,47 @@ def _verify_tiktok_candidate_followers(candidate: dict) -> bool:
     return verify_discovery_profile(candidate)
 
 
+_WAF_COOKIE_NAMES = {"waforiginalreid", "waforigin_id", "_waftokenid", "last_visited_page"}
+
+
+def _strip_expired_waf_cookies(state_path: str) -> None:
+    """Xoá các WAF cookie hết hạn khỏi state file để Playwright tự lấy lại khi warm-up."""
+    import datetime
+    if not os.path.exists(state_path):
+        return
+    try:
+        import json as _json
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = _json.load(f)
+        now = datetime.datetime.now().timestamp()
+        original = state.get("cookies", [])
+        cleaned = [
+            c for c in original
+            if not (c.get("name") in _WAF_COOKIE_NAMES and 0 < c.get("expires", -1) < now)
+        ]
+        if len(cleaned) != len(original):
+            state["cookies"] = cleaned
+            with open(state_path, "w", encoding="utf-8") as f:
+                _json.dump(state, f)
+            logger.info("[DISCOVERY] Đã xoá %d WAF cookie hết hạn khỏi session.", len(original) - len(cleaned))
+    except Exception as e:
+        logger.warning("[DISCOVERY] Không thể dọn WAF cookie: %s", e)
+
+
+def _warmup_tiktok(context, state_path: str) -> None:
+    """Ghé thăm homepage để TikTok cấp WAF cookie tươi, rồi lưu lại state."""
+    try:
+        import json as _json
+        page = context.new_page()
+        page.goto("https://www.tiktok.com/", wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_timeout(2000)
+        page.close()
+        context.storage_state(path=state_path)
+        logger.info("[DISCOVERY] Warm-up TikTok homepage xong, đã lưu WAF cookie mới.")
+    except Exception as e:
+        logger.warning("[DISCOVERY] Warm-up TikTok không thành công (tiếp tục): %s", e)
+
+
 def _init_discovery_context(p):
     browser = p.chromium.launch(
         headless=True,
@@ -88,6 +129,7 @@ def _init_discovery_context(p):
         ],
     )
     state_path = os.path.join("data", "playwright_state.json")
+    _strip_expired_waf_cookies(state_path)
     context_args = {
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "viewport": {"width": 1280, "height": 720},
@@ -96,6 +138,7 @@ def _init_discovery_context(p):
         context_args["storage_state"] = state_path
 
     context = browser.new_context(**context_args)
+    _warmup_tiktok(context, state_path)
     return browser, context
 
 

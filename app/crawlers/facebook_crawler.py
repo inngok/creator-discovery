@@ -56,6 +56,32 @@ def clean_facebook_username(username: str) -> str:
     return username.strip().rstrip("/")
 
 
+_FB_AUTH_COOKIES = {"c_user", "xs"}
+
+
+def is_facebook_session_valid(state_path: str | None = None) -> bool:
+    """Kiểm tra nhanh xem session Facebook còn hợp lệ (có auth cookie) không."""
+    import datetime
+    path = state_path or os.path.join("data", "playwright_fb_state.json")
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        cookies = {c["name"]: c for c in state.get("cookies", [])}
+        now = datetime.datetime.now().timestamp()
+        for name in _FB_AUTH_COOKIES:
+            c = cookies.get(name)
+            if not c:
+                return False
+            # Nếu cookie có expires và đã hết hạn thì coi là hết
+            if c.get("expires", -1) > 0 and c["expires"] < now:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _init_facebook_playwright_context(p) -> tuple[BrowserContext, str]:
     """Khởi tạo context Playwright cho Facebook với Anti-bot và nạp Cookie chuẩn hóa."""
     browser = p.chromium.launch(

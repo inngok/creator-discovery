@@ -26,6 +26,13 @@ def search_new_facebook_candidates(
     Tìm tác giả Facebook qua hashtag và Pages theo từ khóa.
     Trả về danh sách dict chứa: {username, display_name, followers, bio_snippet, profile_url, platform}
     """
+    # Kiểm tra session sớm để tránh mở browser rồi mới fail
+    from app.crawlers.facebook_crawler import is_facebook_session_valid
+    if not is_facebook_session_valid():
+        raise FacebookDiscoveryError(
+            "Session Facebook hết hạn hoặc chưa đăng nhập. "
+            "Chạy 'python scripts/refresh_sessions.py --platform facebook' trên máy chủ để làm mới."
+        )
     discovered: list[dict] = []
     seen_usernames = set()
 

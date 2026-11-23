@@ -121,7 +121,8 @@ def _extract_candidates_from_search_html(html: str) -> list[dict]:
 
 
 def search_new_instagram_candidates(
-    keywords: list[str], max_per_keyword: int = 10, max_total: int = 30
+    keywords: list[str], max_per_keyword: int = 10, max_total: int = 30,
+    requested_category: str | None = None,
 ) -> list[dict]:
     """
     Tự động săn tìm KOC Instagram mới theo từ khóa / lĩnh vực (Beauty, Food, Tech, Fashion...):

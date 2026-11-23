@@ -39,9 +39,10 @@ class CategoryDiscoveryService:
     ) -> list[dict[str, Any]]:
         from app.crawlers.discovery_crawler import (
             search_new_facebook_candidates, search_new_tiktok_candidates,
+            search_new_instagram_candidates,
         )
         target = (platform or "ALL").upper().strip()
-        if target not in {"TIKTOK", "FACEBOOK", "ALL", "BOTH"}:
+        if target not in {"TIKTOK", "FACEBOOK", "INSTAGRAM", "ALL", "BOTH"}:
             raise ValueError("Unsupported discovery platform")
         if limit <= 0:
             return []
@@ -62,6 +63,10 @@ class CategoryDiscoveryService:
             candidates.extend(search_new_facebook_candidates(
                 keywords=terms, max_per_keyword=remaining, max_total=remaining,
                 requested_category=category_code))
+        remaining = limit - len(candidates)
+        if remaining > 0 and target in {"INSTAGRAM", "ALL", "BOTH"}:
+            candidates.extend(search_new_instagram_candidates(
+                keywords=terms, max_per_keyword=remaining, max_total=remaining))
         return candidates[:limit]
 
 

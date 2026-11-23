@@ -191,13 +191,13 @@ class TriggerWeeklyDiscoveryRequest(BaseModel):
     )
     platform: Optional[str] = Field(
         default="ALL",
-        description="Nền tảng săn lùng KOC mới: ALL, TIKTOK, hoặc FACEBOOK",
+        description="Nền tảng săn lùng KOC mới: ALL, TIKTOK, FACEBOOK hoặc INSTAGRAM",
     )
 
 
 @router.post("/trigger-weekly-discovery", summary="Kích hoạt thủ công luồng cào tự động tìm KOC mới (Weekly Discovery)")
 async def trigger_weekly_discovery(req: Optional[TriggerWeeklyDiscoveryRequest] = None) -> dict:
-    """Cho phép kích hoạt ngay luồng cào tự động KOC mới theo từ khóa và nền tảng (ALL / TIKTOK / FACEBOOK)."""
+    """Cho phép kích hoạt ngay luồng cào tự động KOC mới theo từ khóa và nền tảng (ALL / TIKTOK / FACEBOOK / INSTAGRAM)."""
     max_kocs = req.max_new_kocs if req and req.max_new_kocs > 0 else 30
     kw = req.keywords if req else None
     plat = (req.platform if req and req.platform else "ALL").strip().upper()
@@ -346,7 +346,9 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
 
     # 2. Nếu người dùng chọn theo ngành nghề (Taxonomy)
     elif req.category:
-        from app.crawlers.discovery_crawler import FacebookDiscoveryError, TikTokDiscoveryError
+        from app.crawlers.discovery_crawler import (
+            FacebookDiscoveryError, TikTokDiscoveryError, InstagramDiscoveryError,
+        )
         try:
             target_candidates = await asyncio.to_thread(
                 category_discovery_service.get_candidates_by_category, req.category,
@@ -354,12 +356,15 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
                 limit=req.max_channels,
                 platform=req.platform.upper(),
             )
-        except (FacebookDiscoveryError, TikTokDiscoveryError) as error:
+        except (FacebookDiscoveryError, TikTokDiscoveryError, InstagramDiscoveryError) as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     if not target_candidates:
-        if req.platform.upper() == "FACEBOOK":
+        plat_up = req.platform.upper()
+        if plat_up == "FACEBOOK":
             raise HTTPException(status_code=422, detail="Không tìm được kênh Facebook phù hợp với từ khóa. Facebook có thể yêu cầu đăng nhập; hãy kiểm tra kết nối hoặc thử nhập URL kênh cụ thể.")
+        if plat_up == "INSTAGRAM":
+            raise HTTPException(status_code=422, detail="Không tìm được kênh Instagram phù hợp với từ khóa. Hãy thử từ khóa tiếng Anh hoặc nhập URL kênh cụ thể.")
         if req.category and not req.usernames:
             raise HTTPException(status_code=422, detail="Đã kiểm tra nguồn tìm nhưng chưa có tài khoản mới đủ điều kiện và đúng chủ đề. Không lấy tài khoản sai ngành để bù số lượng.")
         raise HTTPException(status_code=400, detail="Vui lòng chọn ngành nghề hợp lệ hoặc nhập ít nhất 1 username/link để cào.")

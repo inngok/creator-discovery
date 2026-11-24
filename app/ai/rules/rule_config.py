@@ -105,7 +105,9 @@ KOC_REVIEW_ACTION_PHRASES = [
     "unbox", "swatch", "haul", "thử thách", "thử đồ",
     "thánh công nghệ", "thanhcongnghe", "test game", "test pin",
     "so sánh camera", "xếp hạng", "top điện thoại", "trên tay nhanh",
-    "đập hộp", "đồ công nghệ", "công nghệ đáng mua"
+    "đập hộp", "đồ công nghệ", "công nghệ đáng mua",
+    "ri viu", "riviu", "decor", "room tour", "roomtour", "mẹo vặt", "mẹo",
+    "gợi ý", "phối đồ", "tips", "hướng dẫn"
 ]
 REGEX_KOC_REVIEW = build_boundary_regex(KOC_REVIEW_ACTION_PHRASES)
 

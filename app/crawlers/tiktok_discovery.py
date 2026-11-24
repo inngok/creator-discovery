@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
@@ -17,6 +18,16 @@ logger = setup_logger("tiktok_discovery")
 
 class TikTokDiscoveryError(RuntimeError):
     pass
+
+
+def _keyword_to_tag(kw: str) -> str:
+    if not isinstance(kw, str):
+        return ""
+    clean = kw.strip().lstrip("#").strip()
+    nfkd = unicodedata.normalize('NFKD', clean)
+    ascii_text = ''.join(c for c in nfkd if not unicodedata.combining(c))
+    ascii_text = ascii_text.replace('đ', 'd').replace('Đ', 'D')
+    return re.sub(r'[^a-zA-Z0-9_]', '', ascii_text).lower()
 
 
 def _run_profile_check(check, *args):
@@ -37,6 +48,10 @@ def _extract_trending_authors(html: str) -> list[dict]:
             continue
         card = link
         text = link.get_text(" ", strip=True)
+        img = link.find("img")
+        img_alt = img.get("alt", "") if img else ""
+        link_title = link.get("title", "")
+        fallback_text = text or img_alt or link_title
         for _ in range(5):
             card = card.parent
             if card is None or card.name in {"body", "html"}:
@@ -49,20 +64,20 @@ def _extract_trending_authors(html: str) -> list[dict]:
             if authors - {match.group(1).casefold()}:
                 break
             candidate_text = card.get_text(" ", strip=True)
-            if 20 <= len(candidate_text) <= 2000:
+            if 1 <= len(candidate_text) <= 2000:
                 text = candidate_text
                 break
-        if text:
-            username = match.group(1)
-            found.setdefault(username.casefold(), {
-                "username": username,
-                "followers": 0,
-                "platform": "TIKTOK",
-                "profile_url": f"https://www.tiktok.com/@{username}",
-                "source_video_url": f"https://www.tiktok.com/@{username}/video/{match.group(2)}",
-                "topic_evidence_text": text,
-                "from_trending": True,
-            })
+        evidence_text = text or fallback_text or f"TikTok @{match.group(1)}"
+        username = match.group(1)
+        found.setdefault(username.casefold(), {
+            "username": username,
+            "followers": 0,
+            "platform": "TIKTOK",
+            "profile_url": f"https://www.tiktok.com/@{username}",
+            "source_video_url": f"https://www.tiktok.com/@{username}/video/{match.group(2)}",
+            "topic_evidence_text": evidence_text,
+            "from_trending": True,
+        })
     return list(found.values())
 
 
@@ -99,12 +114,13 @@ def _ensure_search_available(page, response):
     if isinstance(text, str) and any(message in text.casefold() for message in (
         "something went wrong", "verify to continue", "complete the captcha",
         "sorry, something wrong with the server",
+        "đã xảy ra lỗi", "có vấn đề với máy chủ", "vui lòng thử lại",
     )):
         raise TikTokDiscoveryError("TikTok không trả kết quả công khai hoặc yêu cầu xác minh. Sẽ thử nguồn tìm kiếm dự phòng.")
 
 
 def _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requested_category):
-    """Search indexes provide leads only; verify every lead against its live profile."""
+    """Search indexes and hashtag pages provide leads; verify every lead against its live profile."""
     from app.services.crawled_result_service import get_crawled_tiktok_identifiers
     found = []
     seen = get_crawled_tiktok_identifiers()
@@ -116,9 +132,14 @@ def _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requ
             page = browser.new_page()
             for keyword in keywords:
                 count = 0
+                tag = _keyword_to_tag(keyword)
+                tag_urls = [f"https://www.tiktok.com/tag/{tag}"] if tag else []
                 query = urllib.parse.quote(f'site:tiktok.com/@ "{keyword}"')
-                for url in (f"https://www.google.com/search?q={query}&num=20",
-                            f"https://html.duckduckgo.com/html/?q={query}"):
+                candidate_urls = tag_urls + [
+                    f"https://www.google.com/search?q={query}&num=20",
+                    f"https://html.duckduckgo.com/html/?q={query}",
+                ]
+                for url in candidate_urls:
                     try:
                         response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
                         if response and response.status >= 400:
@@ -193,13 +214,29 @@ def search_new_tiktok_candidates(
                     break
 
                 logger.info(f"[DISCOVERY] Đang quét từ khóa TikTok: '{kw}'...")
-                encoded_kw = urllib.parse.quote(kw)
-                search_url = f"https://www.tiktok.com/search?q={encoded_kw}"
+                clean_kw = kw.strip()
+                tag = _keyword_to_tag(clean_kw)
+                if clean_kw.startswith("#") and tag:
+                    search_url = f"https://www.tiktok.com/tag/{tag}"
+                else:
+                    encoded_kw = urllib.parse.quote(clean_kw)
+                    search_url = f"https://www.tiktok.com/search?q={encoded_kw}"
 
                 try:
-                    response = page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
-                    page.wait_for_timeout(2500)
-                    _ensure_search_available(page, response)
+                    try:
+                        response = page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+                        page.wait_for_timeout(2500)
+                        _ensure_search_available(page, response)
+                    except Exception as nav_err:
+                        # Fallback sang hashtag page nếu search URL gặp lỗi WAF hoặc bị chặn
+                        tag_url = f"https://www.tiktok.com/tag/{tag}" if tag else None
+                        if tag_url and tag_url != search_url:
+                            logger.info(f"[DISCOVERY] Thử tìm kiếm theo hashtag TikTok: '{tag}'...")
+                            response = page.goto(tag_url, wait_until="domcontentloaded", timeout=20000)
+                            page.wait_for_timeout(2500)
+                            _ensure_search_available(page, response)
+                        else:
+                            raise nav_err
 
                     kw_count = 0
                     kw_verified_count = 0

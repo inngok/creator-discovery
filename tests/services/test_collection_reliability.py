@@ -47,10 +47,9 @@ class CollectionReliabilityTest(unittest.TestCase):
 
     def test_all_crawlers_ignore_saved_sessions_and_never_persist_them(self):
         from unittest.mock import MagicMock
-        from app.crawlers.tiktok_crawler import _init_playwright_context
         from app.crawlers.facebook_crawler import _init_facebook_playwright_context
         from app.crawlers.instagram_crawler import _init_instagram_playwright_context
-        for initializer in (_init_playwright_context, _init_facebook_playwright_context, _init_instagram_playwright_context):
+        for initializer in (_init_facebook_playwright_context, _init_instagram_playwright_context):
             with self.subTest(initializer=initializer.__name__), patch("builtins.open", side_effect=AssertionError("Must not read cookie files")):
                 playwright = MagicMock()
                 context, state_path = initializer(playwright)

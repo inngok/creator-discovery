@@ -78,8 +78,8 @@ def _verify_tiktok_candidate_followers(candidate: dict) -> bool:
 
 
 def _init_discovery_context(p):
-    from app.crawlers.public_browser import create_public_context
-    context = create_public_context(p, "TIKTOK")
+    from app.crawlers.tiktok_crawler import _init_playwright_context
+    context, _ = _init_playwright_context(p)
     page = context.new_page()
     try:
         page.goto("https://www.tiktok.com/", wait_until="domcontentloaded", timeout=20000)

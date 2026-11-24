@@ -26,8 +26,8 @@ logger = setup_logger("tiktok_crawler")
 
 
 def _init_playwright_context(p) -> tuple[BrowserContext, None]:
-    from app.crawlers.public_browser import create_public_context
-    return create_public_context(p, "TIKTOK"), None
+    from app.crawlers.tiktok_session import create_tiktok_context
+    return create_tiktok_context(p), None
 
 
 def _setup_network_interception(page: Page, username: str) -> list[Post]:

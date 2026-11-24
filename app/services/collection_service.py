@@ -14,6 +14,12 @@ def session_status(platform: str) -> dict:
     """Describe collection mode; remote readiness requires an actual live request."""
     if platform not in PLATFORMS:
         raise ValueError("Unsupported platform")
+    if platform == "TIKTOK":
+        from app.crawlers.tiktok_session import load_tiktok_session
+        if load_tiktok_session() is not None:
+            return {"platform": platform, "status": "SAVED_SESSION_UNVERIFIED",
+                    "mode": "SAVED_SESSION", "requires_login": False,
+                    "uses_saved_session": True, "remotely_verified": False}
     return {"platform": platform, "status": "PUBLIC_ACCESS_UNVERIFIED",
             "mode": "PUBLIC_ONLY", "requires_login": False,
             "uses_saved_session": False, "remotely_verified": False}

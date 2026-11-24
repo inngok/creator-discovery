@@ -326,7 +326,7 @@ class CollectProfileRequest(BaseModel):
 async def collection_connections() -> dict:
     from app.services.collection_service import PLATFORMS, session_status
     return {"connections": [session_status(platform) for platform in PLATFORMS],
-            "note": "Public access only; saved login sessions are not used. Use /collect to test remote availability."}
+            "note": "TikTok reuses an existing operator session when available. Session presence does not prove live access; use /collect to verify."}
 
 
 @router.post("/collect", summary="Collect a profile with explicit snapshot fallback")

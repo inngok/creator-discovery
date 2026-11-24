@@ -1,12 +1,12 @@
 # Cào thủ công và tự động: TikTok, Facebook, Instagram
 
-## Chế độ truy cập công khai
+## Truy cập TikTok và chế độ công khai
 
-TikTok, Facebook, Instagram chạy bằng context trình duyệt mới, không nạp cookie đăng nhập hoặc storage state từ file và không lưu session ra ổ đĩa. Không cần chạy refresh_sessions.py khi deploy. Các file session cũ không được sử dụng và không cần mang lên server.
+TikTok dùng lại session do người vận hành đã lưu trong `data/playwright_state.json` (hoặc cookie export cũ `data/tiktok_cookies.json`). Đây là khôi phục hành vi trước bản chuyển toàn bộ crawler sang public-only. Cả tìm kiếm, preflight và đọc profile dùng cùng bộ nạp session. Cookie hết hạn và dữ liệu thuộc domain khác được loại trong bộ nhớ; crawler không ghi đè file session.
 
-Cookie khách truy cập do trang tự cấp chỉ tồn tại trong bộ nhớ của lượt chạy. Chế độ này không bảo đảm nguồn cho xem đủ dữ liệu: nếu nền tảng yêu cầu đăng nhập hoặc xác minh, hệ thống báo nguồn công khai bị giới hạn, không yêu cầu khách nhập cookie.
+Có thể đặt `TIKTOK_SESSION_PATH` đến file Playwright state riêng của server. Đặt `TIKTOK_USE_SAVED_SESSION=false` để ép TikTok chạy công khai. Nếu file thiếu, hỏng hoặc không còn cookie hợp lệ, crawler dùng context công khai. Session có mặt không bảo đảm nguồn cho truy cập; `/api/v1/crawl/connections` trả `mode`, `uses_saved_session` và `remotely_verified=false`. Cần gọi `/collect` để kiểm tra live riêng.
 
-GET /api/v1/crawl/connections trả mode PUBLIC_ONLY, requires_login=false và uses_saved_session=false. Đây là thông tin cấu hình, không phải kiểm tra live thành công.
+Facebook và Instagram tiếp tục dùng context công khai, không nạp session lưu trên đĩa. Session/cookie không được commit lên Git. Nếu server thiếu session TikTok, người vận hành phải thiết lập session của mình trên server; deploy code không tự sao chép session từ máy phát triển.
 
 ## Bấm cào theo từ khóa hoặc username
 

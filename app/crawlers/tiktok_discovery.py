@@ -134,10 +134,11 @@ def _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requ
                 count = 0
                 tag = _keyword_to_tag(keyword)
                 tag_urls = [f"https://www.tiktok.com/tag/{tag}"] if tag else []
-                query = urllib.parse.quote(f'site:tiktok.com/@ "{keyword}"')
+                query = urllib.parse.quote(f"site:tiktok.com/@ {keyword}")
                 candidate_urls = tag_urls + [
                     f"https://www.google.com/search?q={query}&num=20",
                     f"https://html.duckduckgo.com/html/?q={query}",
+                    f"https://www.bing.com/search?q={query}&count=20",
                 ]
                 for url in candidate_urls:
                     try:

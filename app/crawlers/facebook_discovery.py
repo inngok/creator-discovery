@@ -70,6 +70,8 @@ def search_new_facebook_candidates(
                 for tag in dict.fromkeys([plain_hashtag, hashtag]):
                     searches.append((keyword, f"https://www.facebook.com/hashtag/{urllib.parse.quote(tag)}", True))
                 searches.append((keyword, f"https://www.facebook.com/search/pages/?q={urllib.parse.quote(keyword)}", False))
+                bing_query = f"site:facebook.com {keyword}"
+                searches.append((keyword, f"https://www.bing.com/search?q={urllib.parse.quote(bing_query)}&count=25", None))
 
             searches = deque(searches)
             while searches:
@@ -91,7 +93,7 @@ def search_new_facebook_candidates(
                         raise FacebookDiscoveryError("Facebook không cho khách chưa đăng nhập xem nguồn này. Thử URL profile công khai hoặc thử lại sau.")
                     dismiss_facebook_dialogs(page)
 
-                    extractor = (extract_facebook_hashtag_candidates if is_hashtag
+                    extractor = (extract_facebook_hashtag_candidates if is_hashtag is True
                                  else extract_facebook_search_card_candidates)
                     candidates = extractor(page.content())
                     # Thu thập trước mỗi lần cuộn trang

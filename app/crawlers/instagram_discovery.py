@@ -192,7 +192,7 @@ def search_new_instagram_candidates(
                     response = page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
                     status = getattr(response, "status", 200)
                     if isinstance(status, int) and status >= 400:
-                        raise InstagramDiscoveryError(f"Instagram indexed search HTTP {status}")
+                        raise InstagramDiscoveryError(f"Public search index HTTP {status}")
                     page.wait_for_timeout(1500)
                     _ensure_index_available(page)
                     candidates = _extract_candidates_from_search_html(page.content())
@@ -201,7 +201,7 @@ def search_new_instagram_candidates(
                     errors.append(str(g_err))
                     logger.debug(f"[INSTAGRAM DISCOVERY] Google search '{clean_kw}' gặp lỗi: {g_err}")
 
-                # 2. Nếu Google bị chặn captcha hoặc ít kết quả -> Fallback sang DuckDuckGo HTML
+                # Search providers are independent; one provider being blocked must not end discovery.
                 if len(candidates) < 3:
                     try:
                         ddg_query = f'site:instagram.com "{clean_kw}" "Vietnam"'
@@ -209,7 +209,7 @@ def search_new_instagram_candidates(
                         response = page.goto(ddg_url, wait_until="domcontentloaded", timeout=12000)
                         status = getattr(response, "status", 200)
                         if isinstance(status, int) and status >= 400:
-                            raise InstagramDiscoveryError(f"Instagram indexed search HTTP {status}")
+                            raise InstagramDiscoveryError(f"Public search index HTTP {status}")
                         page.wait_for_timeout(1000)
                         _ensure_index_available(page)
                         ddg_candidates = _extract_candidates_from_search_html(page.content())
@@ -218,6 +218,22 @@ def search_new_instagram_candidates(
                     except Exception as ddg_err:
                         errors.append(str(ddg_err))
                         logger.debug(f"[INSTAGRAM DISCOVERY] DuckDuckGo search '{clean_kw}' gặp lỗi: {ddg_err}")
+
+                if len(candidates) < 3:
+                    try:
+                        bing_query = f"site:instagram.com {clean_kw} Vietnam"
+                        bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(bing_query)}&count=25"
+                        response = page.goto(bing_url, wait_until="domcontentloaded", timeout=15000)
+                        status = getattr(response, "status", 200)
+                        if isinstance(status, int) and status >= 400:
+                            raise InstagramDiscoveryError(f"Public search index HTTP {status}")
+                        page.wait_for_timeout(1000)
+                        _ensure_index_available(page)
+                        candidates.extend(_extract_candidates_from_search_html(page.content()))
+                        accessible = True
+                    except Exception as bing_err:
+                        errors.append(str(bing_err))
+                        logger.debug(f"[INSTAGRAM DISCOVERY] Bing search '{clean_kw}' gặp lỗi: {bing_err}")
 
                 kw_count = 0
                 for cand in candidates:

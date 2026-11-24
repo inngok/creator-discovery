@@ -390,13 +390,23 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     if not target_candidates:
-        plat_up = req.platform.upper()
-        if plat_up == "FACEBOOK":
-            raise HTTPException(status_code=422, detail="Không tìm được kênh Facebook phù hợp với từ khóa. Facebook có thể yêu cầu đăng nhập; hãy kiểm tra kết nối hoặc thử nhập URL kênh cụ thể.")
-        if plat_up == "INSTAGRAM":
-            raise HTTPException(status_code=422, detail="Không tìm được kênh Instagram phù hợp với từ khóa. Hãy thử từ khóa tiếng Anh hoặc nhập URL kênh cụ thể.")
         if (req.category or req.keywords) and not req.usernames:
-            raise HTTPException(status_code=422, detail="Đã kiểm tra nguồn tìm nhưng chưa có tài khoản mới đủ điều kiện và đúng chủ đề. Không lấy tài khoản sai ngành để bù số lượng.")
+            return {
+                "status": "success",
+                "category": req.category,
+                "platform": req.platform.upper(),
+                "summary": {
+                    "total_requested": req.max_channels,
+                    "attempted_count": 0,
+                    "discovery_shortfall": req.max_channels,
+                    "success_count": 0,
+                    "failed_count": 0,
+                    "avg_latency_ms": 0.0,
+                    "discovery_status": "NO_MATCHES",
+                },
+                "results": [],
+                "metrics": metrics_tracker.get_metrics_summary(),
+            }
         raise HTTPException(status_code=400, detail="Vui lòng chọn ngành nghề hợp lệ hoặc nhập ít nhất 1 username/link để cào.")
 
     results = []

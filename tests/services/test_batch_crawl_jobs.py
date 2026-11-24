@@ -32,6 +32,18 @@ class BatchCrawlJobsTest(unittest.TestCase):
         self.assertEqual(result["result"]["results"], ["creator"])
 
     @patch("app.workers.celery_app.app.AsyncResult")
+    def test_no_match_search_is_completed_not_failed(self, async_result):
+        batch_result = {
+            "status": "success",
+            "summary": {"discovery_status": "NO_MATCHES", "attempted_count": 0},
+            "results": [],
+        }
+        async_result.return_value = SimpleNamespace(state="SUCCESS", result=batch_result)
+        result = asyncio.run(get_batch_crawl_job("12345678-1234-1234-1234-123456789abc"))
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(result["result"]["summary"]["discovery_status"], "NO_MATCHES")
+
+    @patch("app.workers.celery_app.app.AsyncResult")
     def test_source_failure_is_not_reported_as_completed_empty_results(self, async_result):
         async_result.return_value = SimpleNamespace(state="SUCCESS", result={
             "status": "error", "error": "TikTok search unavailable"})

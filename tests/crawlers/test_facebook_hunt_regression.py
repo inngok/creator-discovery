@@ -2,6 +2,7 @@ import unittest
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from app.crawlers.facebook_crawler import parse_stat_number, extract_facebook_followers
 from app.services.category_discovery_service import CategoryDiscoveryService
@@ -103,6 +104,35 @@ class FacebookHuntRegressionTest(unittest.TestCase):
         self.assertEqual(page.goto.call_args.args[0], "https://www.facebook.com/hashtag/foodreview")
         page.goto.assert_called_once()
         context.browser.close.assert_called_once()
+
+    @patch("app.crawlers.facebook_discovery.sync_playwright")
+    @patch("app.crawlers.facebook_crawler._init_facebook_playwright_context")
+    def test_bing_fallback_finds_public_page_when_facebook_search_requires_login(self, initialize, playwright):
+        from unittest.mock import MagicMock
+        from app.crawlers.discovery_crawler import search_new_facebook_candidates
+        context = MagicMock()
+        initialize.return_value = (context, "unused")
+        page = context.new_page.return_value
+        page.url = "https://www.facebook.com/login/"
+        page.content.return_value = "<html><body>Log in</body></html>"
+
+        def navigate(url, **kwargs):
+            page.url = ("https://www.facebook.com/login/" if url.startswith("https://www.facebook.com")
+                        else url)
+            if "bing.com" in url:
+                page.content.return_value = (
+                    '<li class="b_algo"><h2><a href="https://www.facebook.com/saigon.food.creator">'
+                    'Saigon Food Creator</a></h2></li>'
+                )
+            return SimpleNamespace(status=200)
+
+        page.goto.side_effect = navigate
+        with patch("app.crawlers.facebook_discovery.Stealth"), patch(
+                "app.crawlers.facebook_crawler.dismiss_facebook_dialogs"):
+            rows = search_new_facebook_candidates(["food"], max_total=1)
+
+        self.assertEqual([row["username"] for row in rows], ["saigon.food.creator"])
+        self.assertTrue(any("bing.com/search" in call.args[0] for call in page.goto.call_args_list))
 
     def test_stat_units_and_grouping(self):
         for text, expected in [("914", 914), ("914.000", 914000), ("914,000", 914000),

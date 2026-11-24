@@ -30,7 +30,7 @@ Ví dụ username/link cụ thể:
 {"platform":"FACEBOOK","usernames":["https://www.facebook.com/schannel"],"max_channels":1}
 ```
 
-TikTok thử tìm kiếm trực tiếp; khi nguồn lỗi sẽ thử chỉ mục tìm kiếm và xác minh profile/bài viết live. Facebook thử hashtag công khai và Pages. Instagram tìm nguồn chỉ mục, sau đó xác minh profile và chủ đề qua bài viết. Nguồn chặn hoặc không đủ bằng chứng có thể khiến không có kết quả; không bù bằng tài khoản sai chủ đề.
+TikTok thử tìm kiếm trực tiếp; khi nguồn lỗi hoặc không có ứng viên sẽ thử Google, DuckDuckGo và Bing rồi xác minh profile/bài viết live. Facebook thử hashtag công khai, Pages và Bing; Instagram thử Google, DuckDuckGo và Bing, sau đó xác minh profile và chủ đề qua bài viết. Kết quả không có ứng viên phù hợp được trả là hoàn tất với `discovery_status: NO_MATCHES`; lỗi truy cập nguồn vẫn được báo riêng. Nguồn chặn hoặc không đủ bằng chứng có thể khiến không có kết quả; không bù bằng tài khoản sai chủ đề.
 
 Một profile lỗi không làm mất các kết quả khác trong batch. Với `ALL`, lỗi một nền tảng không ngăn thử các nền tảng còn lại.
 

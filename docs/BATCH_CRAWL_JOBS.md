@@ -13,6 +13,10 @@ For the collection UI:
 4. On COMPLETED, render `result` using the existing batch result handling.
 5. On FAILED, show the error and stop polling. Handle HTTP 503 separately.
 
+A search that finishes without eligible accounts is still COMPLETED. Its result has
+`summary.discovery_status: "NO_MATCHES"`, zero attempted accounts, and the full
+requested count in `discovery_shortfall`. Source access failures remain FAILED.
+
 Redis and a Celery worker consuming the `default` queue must be running.
 Restart the API and worker after deployment. Celery results expire according to
 its configured result retention; unknown/expired IDs appear PENDING. Clients

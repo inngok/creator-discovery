@@ -72,6 +72,30 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
         results, _ = self.search(["", "", ""], indexed_results=[{"username": "verified"}])
         self.assertEqual(results, [{"username": "verified"}])
 
+    def test_index_fallback_uses_bing_after_google_and_duckduckgo(self):
+        page = MagicMock()
+        page.goto.side_effect = [SimpleNamespace(status=200)] * 4
+        page.content.side_effect = [
+            "",
+            "",
+            "",
+            '<a href="https://www.tiktok.com/@bingcreator">Bing creator</a>',
+        ]
+        browser = MagicMock()
+        browser.new_page.return_value = page
+        playwright = MagicMock()
+        playwright.chromium.launch.return_value = browser
+        with patch.object(discovery, "sync_playwright") as sync, patch(
+                "app.services.crawled_result_service.get_crawled_tiktok_identifiers", return_value=set()), patch.object(
+                discovery, "_run_profile_check", return_value=True), patch.object(
+                discovery, "_trending_matches_topic", return_value=True):
+            sync.return_value.__enter__.return_value = playwright
+            results = discovery._search_indexed_tiktok_candidates(["review"], 1, 1, None)
+
+        self.assertEqual([candidate["username"] for candidate in results], ["bingcreator"])
+        self.assertIn("bing.com/search", page.goto.call_args_list[-1].args[0])
+        browser.close.assert_called_once()
+
     def test_filtered_search_uses_verified_index_results(self):
         html = self.card("unrelated", "Unrelated video about a different topic")
         results, _ = self.search([html] * 3, topic_match=lambda c, k: False,

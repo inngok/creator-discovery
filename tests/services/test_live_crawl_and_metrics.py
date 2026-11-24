@@ -79,6 +79,20 @@ class TestLiveCrawlAndMetrics(unittest.TestCase):
         self.assertEqual(summary["discovery_shortfall"], 2)
         self.assertEqual(summary["failed_count"], 0)
 
+    @patch("app.api.routers.crawl_router.category_discovery_service.get_candidates_by_category", return_value=[])
+    def test_empty_discovery_is_completed_not_reported_as_interrupted(self, discover):
+        response = self.client.post("/api/v1/crawl/batch-crawl", json={
+            "platform": "TIKTOK", "category": "LIFESTYLE", "max_channels": 1})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["summary"]["discovery_status"], "NO_MATCHES")
+        self.assertEqual(data["summary"]["attempted_count"], 0)
+        self.assertEqual(data["summary"]["failed_count"], 0)
+        self.assertEqual(data["summary"]["discovery_shortfall"], 1)
+        self.assertEqual(data["results"], [])
+
     @patch("app.api.routers.crawl_router.category_discovery_service.get_candidates_by_category")
     @patch("app.services.live_crawl_service.fetch_raw_creator_profile")
     def test_batch_crawl_by_category(self, mock_fetch, mock_discover):

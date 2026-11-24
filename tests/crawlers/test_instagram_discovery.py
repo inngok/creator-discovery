@@ -1,6 +1,7 @@
 import os
 import unittest
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 os.environ["TESTING"] = "1"
 os.environ["DISABLE_CRAWL_PACING"] = "1"
@@ -94,6 +95,27 @@ class TestInstagramDiscovery(unittest.TestCase):
         self.assertEqual(candidates[0]["username"], "foodie_saigon")
         self.assertEqual(candidates[0]["platform"], "INSTAGRAM")
         self.assertEqual(candidates[0]["followers"], 85000)
+
+    @patch("app.crawlers.instagram_discovery._verify_instagram_candidate", return_value=True)
+    @patch("app.crawlers.instagram_discovery.sync_playwright")
+    def test_bing_fallback_recovers_when_google_and_duckduckgo_are_blocked(self, mock_playwright, mock_verify):
+        playwright = mock_playwright.return_value.__enter__.return_value
+        page = playwright.chromium.launch.return_value.new_context.return_value.new_page.return_value
+        page.goto.side_effect = [
+            SimpleNamespace(status=403),
+            SimpleNamespace(status=403),
+            SimpleNamespace(status=200),
+        ]
+        page.content.return_value = """
+        <div><a href="https://www.instagram.com/foodie_saigon/">Foodie Saigon</a>
+        <span>85K followers. Vietnam food reviews.</span></div>
+        """
+
+        candidates = search_new_instagram_candidates(["food"], max_total=1)
+
+        self.assertEqual([candidate["username"] for candidate in candidates], ["foodie_saigon"])
+        self.assertIn("bing.com/search", page.goto.call_args_list[-1].args[0])
+        mock_verify.assert_called_once()
 
     @patch("app.crawlers.discovery_crawler.search_new_instagram_candidates")
     @patch("app.workers.tasks.staging_repo.get_candidate")

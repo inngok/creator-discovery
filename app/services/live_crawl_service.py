@@ -62,6 +62,15 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK",
     if err_resp is not None:
         return err_resp
 
+    market_check = None
+    if platform_upper in {"FACEBOOK", "INSTAGRAM"}:
+        from app.core.vietnam_evidence import vietnam_market_evidence
+        market_check = vietnam_market_evidence(profile_dict, recent_posts)
+        if not market_check["matches"]:
+            return {"status": "error", "platform": platform_upper, "username": clean_user,
+                    "error": "Tài khoản không đủ bằng chứng thuộc thị trường Việt Nam.",
+                    "market_check": market_check}
+
     author_id = profile_dict["author_id"]
     unique_id = profile_dict["unique_id"]
     display_name = profile_dict["display_name"]
@@ -197,4 +206,5 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK",
         "latency_ms": round(latency_ms, 2),
         "recent_posts": recent_posts,
         "collected_at": datetime.now(UTC).isoformat(),
+        "market_check": market_check,
     }

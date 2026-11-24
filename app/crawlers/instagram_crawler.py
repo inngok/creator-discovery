@@ -45,59 +45,9 @@ def parse_instagram_number(val: str) -> int:
         return 0
 
 
-def _init_instagram_playwright_context(p) -> tuple[BrowserContext, str]:
-    """Khởi tạo context Playwright cho Instagram với Cookie nạp tự động."""
-    browser = p.chromium.launch(
-        headless=True,
-        args=[
-            "--disable-gpu",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    )
-
-    state_path = os.path.join("data", "playwright_ig_state.json")
-    context_args = {
-        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
-        "viewport": {"width": 390, "height": 844},
-        "is_mobile": True,
-        "has_touch": True,
-    }
-    if os.path.exists(state_path):
-        context_args["storage_state"] = state_path
-
-    context = browser.new_context(**context_args)
-
-    cookie_path = os.path.join("data", "ig_cookies.json")
-    if os.path.exists(cookie_path) and not os.path.exists(state_path):
-        try:
-            with open(cookie_path, "r", encoding="utf-8") as f:
-                raw_cookies = json.load(f)
-                if isinstance(raw_cookies, dict) and "cookies" in raw_cookies:
-                    raw_cookies = raw_cookies["cookies"]
-                valid_cookies = []
-                for c in raw_cookies:
-                    if not isinstance(c, dict) or "name" not in c or "value" not in c:
-                        continue
-                    cookie_obj = {
-                        "name": str(c["name"]),
-                        "value": str(c["value"]),
-                        "domain": str(c.get("domain", ".instagram.com")),
-                        "path": str(c.get("path", "/")),
-                    }
-                    same_site = str(c.get("sameSite", "")).capitalize()
-                    if same_site in ["Strict", "Lax", "None"]:
-                        cookie_obj["sameSite"] = same_site
-                    valid_cookies.append(cookie_obj)
-
-                if valid_cookies:
-                    context.add_cookies(valid_cookies)
-                    logger.info(f"[Instagram] Đã nạp thành công {len(valid_cookies)} cookies từ {cookie_path}")
-        except Exception as e:
-            logger.warning(f"[Instagram] Không thể nạp cookie từ {cookie_path}: {e}")
-
-    return context, state_path
+def _init_instagram_playwright_context(p) -> tuple[BrowserContext, None]:
+    from app.crawlers.public_browser import create_public_context
+    return create_public_context(p, "INSTAGRAM"), None
 
 
 def extract_instagram_posts_from_soup(soup: BeautifulSoup, max_posts: int = 5) -> tuple[List[Post], str]:
@@ -232,6 +182,20 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         stealth = Stealth()
         stealth.apply_stealth_sync(page)
 
+        from app.crawlers.instagram_timeline import extract_owned_media
+        captured_posts = {}
+
+        def capture_timeline(response):
+            if response.status != 200 or not any(part in response.url for part in ("graphql", "/api/v1/feed/")):
+                return
+            try:
+                for post in extract_owned_media(response.json(), username):
+                    captured_posts[post.platformPostId] = post
+            except Exception:
+                pass
+
+        page.on("response", capture_timeline)
+
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(1500)
@@ -241,6 +205,8 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
 
         content = page.content()
         soup = BeautifulSoup(content, "html.parser")
+        from app.crawlers.meta_public_data import instagram_profile
+        structured_profile = instagram_profile(soup, username)
 
         # 1. Trích xuất Metadata Profile
         meta_desc = soup.find("meta", attrs={"name": "description"})
@@ -256,9 +222,12 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
 
         # Parse Followers trước khi kiểm tra login wall
         followers = 0
-        f_match = re.search(r"([\d.,]+[KMBkmb]?)\s+Followers", desc_text, re.IGNORECASE)
+        f_match = re.search(r"([\d.,]+[KMBkmb]?)\s+(?:Followers|người theo dõi)", desc_text, re.IGNORECASE)
         if f_match:
             followers = parse_instagram_number(f_match.group(1))
+        if structured_profile:
+            followers = structured_profile.get("follower_count", (structured_profile.get("edge_followed_by") or {}).get("count", followers))
+            avatar_url = structured_profile.get("profile_pic_url_hd") or structured_profile.get("profile_pic_url") or avatar_url
 
         # Kiểm tra nếu bị Instagram chặn bắt đăng nhập hoàn toàn (không có cả meta OG followers)
         if followers == 0 and (
@@ -267,7 +236,7 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         ):
             context.browser.close()
             raise ValueError(
-                f"Profile @{username} yêu cầu đăng nhập. Vui lòng thêm cookie vào data/ig_cookies.json để cào tài khoản này."
+                f"Instagram không cho khách chưa đăng nhập xem profile @{username}. Không lấy được dữ liệu công khai; thử lại sau."
             )
 
         # Parse Display Name
@@ -275,6 +244,7 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         dn_match = re.match(r"^(.*?)\s*\(@", title_text)
         if dn_match:
             display_name = dn_match.group(1).strip()
+        display_name = structured_profile.get("full_name") or display_name
 
         # Parse Bio
         bio = ""
@@ -282,6 +252,7 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
             bio_match = re.search(r':\s*"(.*)"\s*$', meta_desc.get("content", ""))
             if bio_match:
                 bio = bio_match.group(1).strip()
+        bio = structured_profile.get("biography") or bio
 
         # Email & Phone từ Bio
         email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", bio)
@@ -294,9 +265,24 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
 
         # 2. Trích xuất bài đăng nhanh từ Relay / Script (Không cần mở từng post)
         recent_posts, user_pk = extract_instagram_posts_from_soup(soup, max_posts=5)
+        user_pk = str(structured_profile.get("pk") or structured_profile.get("id") or user_pk)
+        for script in soup.find_all("script", attrs={"type": "application/json"}):
+            try:
+                for post in extract_owned_media(json.loads(script.string or "{}"), username):
+                    captured_posts[post.platformPostId] = post
+            except (ValueError, TypeError):
+                pass
+        if captured_posts:
+            by_id = {p.platformPostId: p for p in recent_posts}
+            by_id.update(captured_posts)
+            recent_posts = list(by_id.values())[:12]
+        if followers == 0 and not recent_posts and not user_pk:
+            logger.warning("[Instagram Crawler] No public profile or post evidence; refusing an empty result.")
+            context.browser.close()
+            return None
 
         # 3. Chỉ Fallback mở từng post NẾU toàn bộ bài đăng đều không bóc được tương tác (likes=0, comments=0)
-        has_stats = any(p.likes > 0 or p.comments > 0 or p.views > 0 for p in recent_posts)
+        has_stats = any((p.likes or 0) > 0 or (p.comments or 0) > 0 or (p.views or 0) > 0 for p in recent_posts)
         if not has_stats and recent_posts:
             logger.info(f"[Instagram Crawler] Fallback mở bài đăng chi tiết để bóc tương tác cho @{username}...")
             for post in recent_posts[:3]:
@@ -328,13 +314,6 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
         else:
             logger.info(f"[Instagram Crawler] ✅ Đã bóc tương tác tức thì từ script GraphQL cho {len(recent_posts)} bài đăng (Bỏ qua page.goto)!")
 
-        try:
-            if not os.path.exists("data"):
-                os.makedirs("data")
-            context.storage_state(path=state_path)
-        except Exception:
-            pass
-
         context.browser.close()
 
         cross_links = re.findall(r"https?://[^\s\"'>]+", bio) if bio else []
@@ -347,6 +326,7 @@ def _crawl_instagram_profile_sync(username: str) -> Optional[IngestPayload]:
             profileUrl=f"https://www.instagram.com/{username}",
             avatarUrl=avatar_url,
             followers=followers,
+            isVerified=bool(structured_profile.get("is_verified", False)),
             bio=bio,
             publicEmail=public_email,
             publicPhone=public_phone,

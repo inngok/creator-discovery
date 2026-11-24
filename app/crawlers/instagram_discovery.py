@@ -44,6 +44,21 @@ class InstagramDiscoveryError(RuntimeError):
     """Lỗi khi thực hiện tìm kiếm / discovery KOC Instagram mới."""
 
 
+def _ensure_index_available(page):
+    text = page.locator("body").inner_text(timeout=3000)
+    if isinstance(text, str) and any(term in text.casefold() for term in (
+            "unusual traffic", "automated queries", "lưu lượng truy cập bất thường",
+            "hệ thống của chúng tôi đã phát hiện", "complete the captcha")):
+        raise InstagramDiscoveryError("Search index temporarily blocks automated access")
+
+
+def _verify_instagram_candidate(candidate: dict, topic: str) -> bool:
+    from app.crawlers.tiktok_discovery import _run_profile_check
+    from app.services.discovery_verification import verify_discovery_profile, matches_requested_topic
+    return (_run_profile_check(verify_discovery_profile, candidate)
+            and matches_requested_topic(candidate, topic))
+
+
 def _clean_instagram_username(raw: str) -> str | None:
     """Chuẩn hóa và lọc username Instagram hợp lệ."""
     if not raw:
@@ -132,6 +147,11 @@ def search_new_instagram_candidates(
     """
     discovered: list[dict] = []
     seen_usernames: set[str] = set()
+    checks = 0
+    budget = min(max_total * 3, 30)
+    errors = []
+    accessible = False
+    browser = None
 
     with sync_playwright() as p:
         try:
@@ -153,7 +173,7 @@ def search_new_instagram_candidates(
             stealth.apply_stealth_sync(page)
 
             for kw in keywords:
-                if len(discovered) >= max_total:
+                if len(discovered) >= max_total or checks >= budget:
                     break
 
                 clean_kw = kw.strip().lstrip("#").strip()
@@ -163,28 +183,40 @@ def search_new_instagram_candidates(
                 logger.info(f"[INSTAGRAM DISCOVERY] Đang quét KOC Instagram ngành: '{clean_kw}'...")
 
                 # 1. Thử quét qua Google Dorking
-                query = f'site:instagram.com "{clean_kw}" -inurl:p -inurl:reel -inurl:explore'
+                query = f'site:instagram.com "{clean_kw}" ("Việt Nam" OR "Vietnam") -inurl:p -inurl:reel -inurl:explore'
                 encoded_q = urllib.parse.quote(query)
-                search_url = f"https://www.google.com/search?q={encoded_q}&num=25&hl=vi"
+                search_url = f"https://www.google.com/search?q={encoded_q}&num=25&hl=vi&gl=vn&lr=lang_vi"
 
                 candidates: list[dict] = []
                 try:
-                    page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+                    response = page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+                    status = getattr(response, "status", 200)
+                    if isinstance(status, int) and status >= 400:
+                        raise InstagramDiscoveryError(f"Instagram indexed search HTTP {status}")
                     page.wait_for_timeout(1500)
+                    _ensure_index_available(page)
                     candidates = _extract_candidates_from_search_html(page.content())
+                    accessible = True
                 except Exception as g_err:
+                    errors.append(str(g_err))
                     logger.debug(f"[INSTAGRAM DISCOVERY] Google search '{clean_kw}' gặp lỗi: {g_err}")
 
                 # 2. Nếu Google bị chặn captcha hoặc ít kết quả -> Fallback sang DuckDuckGo HTML
                 if len(candidates) < 3:
                     try:
-                        ddg_query = f'site:instagram.com "{clean_kw}"'
+                        ddg_query = f'site:instagram.com "{clean_kw}" "Vietnam"'
                         ddg_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(ddg_query)}"
-                        page.goto(ddg_url, wait_until="domcontentloaded", timeout=12000)
+                        response = page.goto(ddg_url, wait_until="domcontentloaded", timeout=12000)
+                        status = getattr(response, "status", 200)
+                        if isinstance(status, int) and status >= 400:
+                            raise InstagramDiscoveryError(f"Instagram indexed search HTTP {status}")
                         page.wait_for_timeout(1000)
+                        _ensure_index_available(page)
                         ddg_candidates = _extract_candidates_from_search_html(page.content())
                         candidates.extend(ddg_candidates)
+                        accessible = True
                     except Exception as ddg_err:
+                        errors.append(str(ddg_err))
                         logger.debug(f"[INSTAGRAM DISCOVERY] DuckDuckGo search '{clean_kw}' gặp lỗi: {ddg_err}")
 
                 kw_count = 0
@@ -200,6 +232,13 @@ def search_new_instagram_candidates(
                         logger.debug(f"[INSTAGRAM DISCOVERY] Bỏ qua @{cand['username']}: {reason}")
                         continue
 
+                    if checks >= budget:
+                        break
+                    checks += 1
+                    cand["search_keyword"] = clean_kw
+                    cand["requested_category"] = requested_category
+                    if not _verify_instagram_candidate(cand, f"{requested_category or ''}; {clean_kw}"):
+                        continue
                     discovered.append(cand)
                     kw_count += 1
                     if kw_count >= max_per_keyword or len(discovered) >= max_total:
@@ -210,8 +249,13 @@ def search_new_instagram_candidates(
                 )
                 page.wait_for_timeout(1000)
 
-            browser.close()
         except Exception as e:
+            errors.append(str(e))
             logger.error(f"[INSTAGRAM DISCOVERY] Lỗi trong tiến trình tìm kiếm Instagram: {e}")
+        finally:
+            if browser is not None:
+                browser.close()
 
+    if errors and not accessible and not discovered:
+        raise InstagramDiscoveryError("Instagram discovery unavailable: " + "; ".join(errors[:3]))
     return discovered

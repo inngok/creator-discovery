@@ -25,7 +25,7 @@ class CreatorInfo(BaseModel):
     bio: str | None = None
     isVerified: bool = False
 
-    # Optional commercial contact info (extra fields not in example but useful)
+    # Optional public commercial contact info
     publicEmail: str | None = None
     publicPhone: str | None = None
     bioCrossLinks: list[str] = Field(default_factory=list)

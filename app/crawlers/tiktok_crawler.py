@@ -25,47 +25,9 @@ from app.core.models import CreatorInfo, IngestPayload, Platform, Post
 logger = setup_logger("tiktok_crawler")
 
 
-def _init_playwright_context(p) -> tuple[BrowserContext, str]:
-    browser = p.chromium.launch(
-        headless=True,
-        args=[
-            "--disable-gpu",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    )
-    state_path = os.path.join("data", "playwright_state.json")
-    context_args = {
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "viewport": {"width": 1280, "height": 720},
-    }
-    if os.path.exists(state_path):
-        context_args["storage_state"] = state_path
-
-    context = browser.new_context(**context_args)
-
-    # Init cookie
-    cookie_path = os.path.join("data", "tiktok_cookies.json")
-    if os.path.exists(cookie_path) and not os.path.exists(state_path):
-        try:
-            with open(cookie_path, "r", encoding="utf-8") as f:
-                cookies = json.load(f)
-                valid_cookies = []
-                for c in cookies:
-                    if "sameSite" in c and c["sameSite"] not in [
-                        "Strict",
-                        "Lax",
-                        "None",
-                    ]:
-                        del c["sameSite"]
-                    valid_cookies.append(c)
-                context.add_cookies(valid_cookies)
-            logger.info(f"Loaded cookies from {cookie_path}")
-        except Exception as e:
-            logger.warning(f"Error loading cookies: {e}")
-
-    return context, state_path
+def _init_playwright_context(p) -> tuple[BrowserContext, None]:
+    from app.crawlers.public_browser import create_public_context
+    return create_public_context(p, "TIKTOK"), None
 
 
 def _setup_network_interception(page: Page, username: str) -> list[Post]:
@@ -277,11 +239,6 @@ def _crawl_tiktok_profile_sync(username: str) -> IngestPayload | None:
                         )
 
             creator_info = _extract_user_info_from_dom(page, username, url)
-
-            try:
-                context.storage_state(path=state_path)
-            except Exception as e:
-                logger.warning(f"Failed to save storage_state: {e}")
 
         finally:
             context.browser.close()

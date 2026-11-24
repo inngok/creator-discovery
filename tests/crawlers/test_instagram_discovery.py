@@ -61,8 +61,9 @@ class TestInstagramDiscovery(unittest.TestCase):
         self.assertEqual(c2["followers"], 3500)
         self.assertEqual(c2["platform"], "INSTAGRAM")
 
+    @patch("app.crawlers.instagram_discovery._verify_instagram_candidate", return_value=True)
     @patch("app.crawlers.instagram_discovery.sync_playwright")
-    def test_search_new_instagram_candidates(self, mock_playwright):
+    def test_search_new_instagram_candidates(self, mock_playwright, mock_verify):
         mock_p = MagicMock()
         mock_playwright.return_value.__enter__.return_value = mock_p
         mock_browser = MagicMock()

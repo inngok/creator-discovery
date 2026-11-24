@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
+from app.core.crawl_progress import report_crawl_progress
 from app.crawlers.search_extractor import (
     evaluate_tier0_search_card,
     parse_follower_string,
@@ -181,6 +182,12 @@ def search_new_instagram_candidates(
                     continue
 
                 logger.info(f"[INSTAGRAM DISCOVERY] Đang quét KOC Instagram ngành: '{clean_kw}'...")
+                report_crawl_progress(
+                    f"Instagram: đang tìm theo từ khóa '{clean_kw}'.",
+                    platform="INSTAGRAM",
+                    keyword=clean_kw,
+                    stage="search",
+                )
 
                 # 1. Thử quét qua Google Dorking
                 query = f'site:instagram.com "{clean_kw}" ("Việt Nam" OR "Vietnam") -inurl:p -inurl:reel -inurl:explore'
@@ -189,6 +196,12 @@ def search_new_instagram_candidates(
 
                 candidates: list[dict] = []
                 try:
+                    report_crawl_progress(
+                        f"Instagram: đang tìm trên Google cho '{clean_kw}'.",
+                        platform="INSTAGRAM",
+                        keyword=clean_kw,
+                        stage="search_provider",
+                    )
                     response = page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
                     status = getattr(response, "status", 200)
                     if isinstance(status, int) and status >= 400:
@@ -204,6 +217,12 @@ def search_new_instagram_candidates(
                 # Search providers are independent; one provider being blocked must not end discovery.
                 if len(candidates) < 3:
                     try:
+                        report_crawl_progress(
+                            f"Instagram: đang thử DuckDuckGo cho '{clean_kw}'.",
+                            platform="INSTAGRAM",
+                            keyword=clean_kw,
+                            stage="search_provider",
+                        )
                         ddg_query = f'site:instagram.com "{clean_kw}" "Vietnam"'
                         ddg_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(ddg_query)}"
                         response = page.goto(ddg_url, wait_until="domcontentloaded", timeout=12000)
@@ -221,6 +240,12 @@ def search_new_instagram_candidates(
 
                 if len(candidates) < 3:
                     try:
+                        report_crawl_progress(
+                            f"Instagram: đang thử Bing cho '{clean_kw}'.",
+                            platform="INSTAGRAM",
+                            keyword=clean_kw,
+                            stage="search_provider",
+                        )
                         bing_query = f"site:instagram.com {clean_kw} Vietnam"
                         bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(bing_query)}&count=25"
                         response = page.goto(bing_url, wait_until="domcontentloaded", timeout=15000)
@@ -253,6 +278,12 @@ def search_new_instagram_candidates(
                     checks += 1
                     cand["search_keyword"] = clean_kw
                     cand["requested_category"] = requested_category
+                    report_crawl_progress(
+                        f"Instagram: đang xác minh hồ sơ @{cand['username']}.",
+                        platform="INSTAGRAM",
+                        keyword=clean_kw,
+                        stage="profile_verification",
+                    )
                     if not _verify_instagram_candidate(cand, f"{requested_category or ''}; {clean_kw}"):
                         continue
                     discovered.append(cand)
@@ -262,6 +293,12 @@ def search_new_instagram_candidates(
 
                 logger.info(
                     f"[INSTAGRAM DISCOVERY] Quét xong ngành '{clean_kw}': Thu thập {kw_count} ứng viên Instagram."
+                )
+                report_crawl_progress(
+                    f"Instagram: xong '{clean_kw}', có {kw_count} ứng viên đạt điều kiện.",
+                    platform="INSTAGRAM",
+                    keyword=clean_kw,
+                    stage="search_complete",
                 )
                 page.wait_for_timeout(1000)
 

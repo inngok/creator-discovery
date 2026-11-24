@@ -300,6 +300,7 @@ async def resolve_tiktok_author(req: ResolveAuthorRequest) -> dict:
 from app.services.category_discovery_service import category_discovery_service
 from app.services.live_crawl_service import crawl_single_koc_live
 from app.core.metrics_tracker import metrics_tracker
+from app.core.crawl_progress import report_crawl_progress
 
 
 class TestScrapeRequest(BaseModel):
@@ -380,6 +381,11 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
             FacebookDiscoveryError, TikTokDiscoveryError, InstagramDiscoveryError,
         )
         try:
+            report_crawl_progress(
+                f"Đang tìm hồ sơ theo {len(req.keywords) if req.keywords else 0} từ khóa.",
+                platform=req.platform.upper(),
+                stage="discovery",
+            )
             target_candidates = await asyncio.to_thread(
                 category_discovery_service.get_candidates_by_category, req.category or " ".join(req.keywords),
                 keywords=req.keywords,
@@ -389,8 +395,19 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         except (FacebookDiscoveryError, TikTokDiscoveryError, InstagramDiscoveryError) as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
+    report_crawl_progress(
+        f"Hoàn tất tìm kiếm; có {len(target_candidates)} hồ sơ để xử lý.",
+        platform=req.platform.upper(),
+        stage="profiles",
+    )
+
     if not target_candidates:
         if (req.category or req.keywords) and not req.usernames:
+            report_crawl_progress(
+                "Không có hồ sơ mới đạt điều kiện trong lượt tìm này.",
+                platform=req.platform.upper(),
+                stage="no_matches",
+            )
             return {
                 "status": "success",
                 "category": req.category,
@@ -414,10 +431,16 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
     failed_count = 0
     total_latency = 0.0
 
-    for c in target_candidates:
+    for index, c in enumerate(target_candidates, start=1):
         c_plat = c.get("platform", req.platform.upper())
         if c_plat == "ALL":
             c_plat = "TIKTOK"
+        report_crawl_progress(
+            f"Đang thu thập hồ sơ {index}/{len(target_candidates)}: @{c['username']}.",
+            platform=c_plat,
+            keyword=c.get("search_keyword"),
+            stage="profile",
+        )
         try:
             if c.get("_verified_snapshot"):
                 res = await asyncio.to_thread(crawl_single_koc_live, c["username"], c_plat,
@@ -428,6 +451,23 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
             logger.warning("Batch profile failed (%s): %s", c_plat, type(error).__name__)
             res = {"status": "error", "platform": c_plat, "username": c["username"],
                    "error": "Không lấy được dữ liệu công khai. Nguồn có thể đang chặn truy cập; thử lại sau."}
+        decision = res.get("decision")
+        if res.get("status") != "success":
+            completion_message = f"Không thu thập được @{c['username']}: {res.get('error', 'lỗi nguồn dữ liệu')}."
+        elif decision in {"AUTO_ACCEPT_KOC", "AUTO_ACCEPT_KOL"}:
+            completion_message = f"Đã cào @{c['username']}: đạt chuẩn {res.get('primary_type')}."
+        elif decision in {"SKIP_INSUFFICIENT", "NEEDS_MANAGER_REVIEW", "RETRY_PREFLIGHT"}:
+            completion_message = f"Đã cào @{c['username']}: cần kiểm định thêm ({decision})."
+        elif decision in {"AUTO_REJECT", "MANAGER_REJECTED"}:
+            completion_message = f"Đã cào @{c['username']}: bị loại ({decision})."
+        else:
+            completion_message = f"Đã cào @{c['username']}: chưa có kết luận phân loại."
+        report_crawl_progress(
+            completion_message,
+            platform=c_plat,
+            keyword=c.get("search_keyword"),
+            stage="profile_complete",
+        )
         if res.get("status") == "success":
             success_count += 1
             total_latency += res.get("latency_ms", 0.0)
@@ -492,14 +532,30 @@ async def get_batch_crawl_job(task_id: str) -> dict:
     task = celery_app.AsyncResult(task_id)
     try:
         state = await asyncio.to_thread(lambda: task.state)
+        task_info = await asyncio.to_thread(lambda: getattr(task, "info", None))
+        progress = task_info.get("progress") if isinstance(task_info, dict) else None
         if state == "SUCCESS":
             result = await asyncio.to_thread(lambda: task.result)
             if isinstance(result, dict) and result.get("status") == "error":
-                return {"status": "FAILED", "task_id": task_id, "error": result.get("error", "Batch crawl failed")}
+                return {
+                    "status": "FAILED",
+                    "task_id": task_id,
+                    "error": result.get("error", "Batch crawl failed"),
+                    "progress": result.get("progress", progress),
+                }
             return {"status": "COMPLETED", "task_id": task_id, "result": result}
         if state == "FAILURE":
-            return {"status": "FAILED", "task_id": task_id,
-                    "error": "Batch crawl failed; inspect crawler worker logs"}
-        return {"status": state, "task_id": task_id}
+            response: dict[str, Any] = {
+                "status": "FAILED",
+                "task_id": task_id,
+                "error": "Batch crawl failed; inspect crawler worker logs",
+            }
+            if progress:
+                response["progress"] = progress
+            return response
+        response: dict[str, Any] = {"status": state, "task_id": task_id}
+        if progress:
+            response["progress"] = progress
+        return response
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Crawler result store is unavailable") from exc

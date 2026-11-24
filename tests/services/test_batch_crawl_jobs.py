@@ -3,6 +3,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from fastapi import HTTPException
+from app.core.crawl_progress import (
+    report_crawl_progress,
+    reset_crawl_progress_callback,
+    set_crawl_progress_callback,
+)
 from app.api.routers.crawl_router import (
     BatchCrawlRequest, start_batch_crawl_job, get_batch_crawl_job,
 )
@@ -42,6 +47,40 @@ class BatchCrawlJobsTest(unittest.TestCase):
         result = asyncio.run(get_batch_crawl_job("12345678-1234-1234-1234-123456789abc"))
         self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["result"]["summary"]["discovery_status"], "NO_MATCHES")
+
+    @patch("app.workers.celery_app.app.AsyncResult")
+    def test_poll_returns_live_progress_logs(self, async_result):
+        progress = {
+            "logs": ["[17:50:00] TikTok: đang quét từ khóa 'review'."],
+            "current_keyword": "review",
+            "platform": "TIKTOK",
+            "stage": "search",
+        }
+        async_result.return_value = SimpleNamespace(
+            state="PROGRESS", info={"progress": progress}
+        )
+
+        result = asyncio.run(get_batch_crawl_job("12345678-1234-1234-1234-123456789abc"))
+
+        self.assertEqual(result["status"], "PROGRESS")
+        self.assertEqual(result["progress"], progress)
+
+    def test_progress_context_reaches_worker_thread(self):
+        events = []
+        token = set_crawl_progress_callback(events.append)
+        try:
+            asyncio.run(asyncio.to_thread(
+                report_crawl_progress,
+                "Đang tìm từ khóa.",
+                platform="TIKTOK",
+                keyword="review",
+                stage="search",
+            ))
+        finally:
+            reset_crawl_progress_callback(token)
+
+        self.assertEqual(events[0]["keyword"], "review")
+        self.assertEqual(events[0]["platform"], "TIKTOK")
 
     @patch("app.workers.celery_app.app.AsyncResult")
     def test_source_failure_is_not_reported_as_completed_empty_results(self, async_result):

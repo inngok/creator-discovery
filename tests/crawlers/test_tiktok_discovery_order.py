@@ -4,6 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.crawlers import tiktok_discovery as discovery
+from app.core.crawl_progress import (
+    report_crawl_progress,
+    reset_crawl_progress_callback,
+    set_crawl_progress_callback,
+)
 
 
 class TikTokDiscoveryOrderTest(unittest.TestCase):
@@ -39,6 +44,37 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
         results, page = self.search([self.card("topcreator", "Travel guide to the mountains")])
         self.assertEqual([c["username"] for c in results], ["topcreator"])
         page.mouse.wheel.assert_not_called()
+
+    def test_multiword_hashtag_input_uses_text_search(self):
+        self.assertEqual(
+            discovery._tiktok_search_url("#review công nghệ"),
+            "https://www.tiktok.com/search?q=review%20c%C3%B4ng%20ngh%E1%BB%87",
+        )
+        self.assertEqual(
+            discovery._tiktok_search_url("#review"),
+            "https://www.tiktok.com/tag/review",
+        )
+
+    def test_keyword_search_reports_live_progress(self):
+        events = []
+        token = set_crawl_progress_callback(events.append)
+        try:
+            self.search([self.card("topcreator", "Travel guide to the mountains")])
+        finally:
+            reset_crawl_progress_callback(token)
+
+        self.assertTrue(any(event["keyword"] == "travel" for event in events))
+        self.assertTrue(any(event["stage"] == "search_complete" for event in events))
+
+    def test_profile_check_thread_receives_live_progress_callback(self):
+        events = []
+        token = set_crawl_progress_callback(events.append)
+        try:
+            discovery._run_profile_check(report_crawl_progress, "profile checked")
+        finally:
+            reset_crawl_progress_callback(token)
+
+        self.assertEqual([event["message"] for event in events], ["profile checked"])
 
     def test_top_user_card_is_not_skipped_for_video_results(self):
         html = ('<div data-e2e="search-user-card">'

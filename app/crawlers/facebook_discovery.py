@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
+from app.core.crawl_progress import report_crawl_progress
 from app.crawlers.search_extractor import evaluate_tier0_search_card
 from app.crawlers.tiktok_discovery import _run_profile_check
 from app.services.discovery_verification import verify_discovery_profile, matches_requested_topic
@@ -82,6 +83,15 @@ def search_new_facebook_candidates(
                     continue
 
                 logger.info(f"[DISCOVERY FB] Đang quét từ khóa Facebook: '{kw}'...")
+                source = "Bing" if "bing.com" in search_url else (
+                    "hashtag" if is_hashtag else "Pages"
+                )
+                report_crawl_progress(
+                    f"Facebook: đang tìm '{kw}' trên {source}.",
+                    platform="FACEBOOK",
+                    keyword=kw,
+                    stage="search",
+                )
 
                 try:
                     response = page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
@@ -131,6 +141,12 @@ def search_new_facebook_candidates(
                         if profile_checks >= verification_budget:
                             break
                         profile_checks += 1
+                        report_crawl_progress(
+                            f"Facebook: đang xác minh hồ sơ @{username}.",
+                            platform="FACEBOOK",
+                            keyword=kw,
+                            stage="profile_verification",
+                        )
                         if not _run_profile_check(verify_discovery_profile, cand):
                             continue
                         if not matches_requested_topic(cand, f"{requested_category or ''}; {kw}"):
@@ -145,13 +161,31 @@ def search_new_facebook_candidates(
                     logger.info(
                         f"[DISCOVERY FB] Quét xong từ khóa '{kw}': Tìm thấy {kw_count} Fanpage/KOC tiềm năng."
                     )
+                    report_crawl_progress(
+                        f"Facebook: xong '{kw}' trên {source}, có {kw_count} ứng viên đạt điều kiện.",
+                        platform="FACEBOOK",
+                        keyword=kw,
+                        stage="search_complete",
+                    )
                     page.wait_for_timeout(2000)
 
                 except FacebookDiscoveryError as access_error:
                     access_errors.append(access_error)
+                    report_crawl_progress(
+                        f"Facebook: {source} không cho truy cập công khai, chuyển nguồn khác.",
+                        platform="FACEBOOK",
+                        keyword=kw,
+                        stage="source_error",
+                    )
                     continue
                 except Exception as kw_err:
                     logger.warning(f"[DISCOVERY FB] Lỗi khi quét từ khóa '{kw}': {kw_err}")
+                    report_crawl_progress(
+                        f"Facebook: lỗi khi tìm '{kw}' trên {source}, thử tiếp nguồn khác.",
+                        platform="FACEBOOK",
+                        keyword=kw,
+                        stage="source_error",
+                    )
                     target_closed = ("Target page, context or browser has been closed" in str(kw_err)
                                      or page.is_closed() is True
                                      or (context.browser and context.browser.is_connected() is False))

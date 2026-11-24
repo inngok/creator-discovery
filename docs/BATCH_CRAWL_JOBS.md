@@ -12,6 +12,9 @@ For the collection UI:
 3. GET `status_url` every 2 seconds while status is PENDING or STARTED.
 4. On COMPLETED, render `result` using the existing batch result handling.
 5. On FAILED, show the error and stop polling. Handle HTTP 503 separately.
+6. While the status is STARTED or PROGRESS, render `progress.logs`, `progress.current_keyword`,
+   and `progress.platform` when present. These are emitted by the worker during discovery
+   and profile collection, not synthesized from elapsed time.
 
 A search that finishes without eligible accounts is still COMPLETED. Its result has
 `summary.discovery_status: "NO_MATCHES"`, zero attempted accounts, and the full

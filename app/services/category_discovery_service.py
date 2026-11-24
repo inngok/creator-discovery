@@ -2,6 +2,7 @@ import os
 import re
 from typing import Any
 from app.core.logger import setup_logger
+from app.core.crawl_progress import report_crawl_progress
 
 logger = setup_logger("category_discovery_service")
 
@@ -65,10 +66,26 @@ class CategoryDiscoveryService:
             if target not in {name, "ALL", "BOTH"}:
                 continue
             try:
+                report_crawl_progress(
+                    f"Bắt đầu tìm ứng viên trên {name}.",
+                    platform=name,
+                    stage="discovery",
+                )
                 kwargs = dict(keywords=terms, max_per_keyword=remaining, max_total=remaining)
                 kwargs["requested_category"] = category_code
+                before_count = len(candidates)
                 candidates.extend(runner(**kwargs))
+                report_crawl_progress(
+                    f"{name}: tìm thấy {len(candidates) - before_count} ứng viên đạt điều kiện.",
+                    platform=name,
+                    stage="discovery",
+                )
             except Exception as error:
+                report_crawl_progress(
+                    f"{name}: nguồn tìm kiếm gặp lỗi, đang xử lý nền tảng tiếp theo.",
+                    platform=name,
+                    stage="source_error",
+                )
                 if target not in {"ALL", "BOTH"}:
                     raise
                 errors.append(error)

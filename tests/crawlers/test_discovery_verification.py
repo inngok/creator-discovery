@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import patch, mock_open
 
 from app.services.discovery_verification import verify_discovery_profile, matches_requested_topic
-from app.crawlers.tiktok_discovery import _verify_tiktok_candidate_followers
+from app.core.crawl_progress import reset_crawl_progress_callback, set_crawl_progress_callback
+from app.crawlers.tiktok_discovery import _run_profile_check, _verify_tiktok_candidate_followers
 from app.ai.rules.rule_config import Decision
 from app.ai.rules.rule_engine import RuleDecisionResult
 
@@ -30,6 +31,33 @@ class DiscoveryVerificationTest(unittest.TestCase):
             "My birthday party", "My friends", "My family", "My pet", "Hello everyone"], followers=900000)
         self.assertFalse(accepted)
         self.assertNotIn("_verified_snapshot", candidate)
+
+    def test_tiktok_topic_lead_without_creator_signals_is_kept_for_review(self):
+        events = []
+        token = set_crawl_progress_callback(events.append)
+        candidate = {
+            "username": "creator",
+            "platform": "TIKTOK",
+            "topic_evidence_text": "Review điện thoại, trải nghiệm camera và pin",
+            "search_keyword": "review điện thoại",
+        }
+        try:
+            with patch("app.services.live_fetcher_service.fetch_raw_creator_profile",
+                       return_value=self.profile(["Video trải nghiệm điện thoại"] * 5)):
+                with patch("app.services.discovery_verification.RuleEngine.evaluate",
+                           return_value=SimpleNamespace(
+                               decision=Decision.SKIP_INSUFFICIENT,
+                               reason_codes=["NO_CREATOR_EVIDENCE"],
+                               primary_type="UNKNOWN",
+                           )):
+                    accepted = _run_profile_check(_verify_tiktok_candidate_followers, candidate)
+        finally:
+            reset_crawl_progress_callback(token)
+
+        self.assertTrue(accepted)
+        self.assertTrue(candidate["requires_manual_review"])
+        self.assertEqual(len(candidate["_verified_snapshot"]["posts"]), 5)
+        self.assertTrue(any(event["stage"] == "review_candidate" for event in events))
 
     def test_one_viral_review_does_not_establish_creator(self):
         accepted, _ = self.verify(["Review du lịch ưu điểm đẹp và nhược điểm đông"])
@@ -56,10 +84,13 @@ class DiscoveryVerificationTest(unittest.TestCase):
         with patch("app.services.live_fetcher_service.fetch_raw_creator_profile", return_value=data):
             self.assertFalse(verify_discovery_profile({"username": "creator", "platform": "TIKTOK"}))
 
-    def topic(self, answer, posts=None):
-        candidate = {"topic_evidence_posts": posts or [
-            {"postId": "1", "caption": "Travel mountain hiking guide"},
-            {"postId": "2", "caption": "Travel resort review and costs"}]}
+    def topic(self, answer, posts=None, requires_manual_review=False):
+        candidate = {
+            "topic_evidence_posts": posts or [
+                {"postId": "1", "caption": "Travel mountain hiking guide"},
+                {"postId": "2", "caption": "Travel resort review and costs"}],
+            "requires_manual_review": requires_manual_review,
+        }
         fake = SimpleNamespace(get_llm_enrichment=lambda _: answer)
         with patch.dict("sys.modules", {"app.ai.analyzer": fake}):
             return matches_requested_topic(candidate, "travel")
@@ -83,6 +114,12 @@ class DiscoveryVerificationTest(unittest.TestCase):
             answer = self.answer()
             answer[field] = value
             self.assertFalse(self.topic(answer))
+
+    def test_ambiguous_creator_with_grounded_topic_evidence_can_be_reviewed(self):
+        answer = self.answer()
+        answer.update(creatorType="UNKNOWN", confidence=0.7)
+        self.assertTrue(self.topic(answer, requires_manual_review=True))
+        self.assertFalse(self.topic(answer))
 
     def test_search_card_alone_is_not_topic_evidence(self):
         fake = SimpleNamespace(get_llm_enrichment=lambda _: self.answer())

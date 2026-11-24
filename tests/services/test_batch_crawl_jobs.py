@@ -14,6 +14,46 @@ from app.api.routers.crawl_router import (
 
 
 class BatchCrawlJobsTest(unittest.TestCase):
+    @patch("app.workers.tasks.batch_crawl_job.update_state")
+    def test_worker_progress_keeps_task_id_across_threads(self, update_state):
+        from app.workers.tasks import batch_crawl_job
+
+        async def crawl(_):
+            await asyncio.to_thread(report_crawl_progress, "Discovery running", stage="search")
+            return {"status": "success", "results": []}
+
+        task_id = "12345678-1234-1234-1234-123456789abc"
+        batch_crawl_job.push_request(id=task_id)
+        try:
+            with patch("app.api.routers.crawl_router.batch_crawl_kocs", side_effect=crawl):
+                result = batch_crawl_job.run({"keywords": ["review"], "platform": "TIKTOK"})
+        finally:
+            batch_crawl_job.pop_request()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(update_state.call_count, 2)
+        for call in update_state.call_args_list:
+            self.assertEqual(call.kwargs["task_id"], task_id)
+
+    @patch("app.workers.celery_app.app.AsyncResult")
+    def test_unregistered_worker_reports_recovery_action(self, async_result):
+        from celery.exceptions import NotRegistered
+        async_result.return_value = SimpleNamespace(
+            state="FAILURE", info=NotRegistered("app.workers.tasks.batch_crawl_job"))
+        result = asyncio.run(get_batch_crawl_job("12345678-1234-1234-1234-123456789abc"))
+        self.assertEqual(result["status"], "FAILED")
+        self.assertIn("khởi động lại", result["error"])
+
+    @patch("app.api.routers.crawl_router.batch_crawl_kocs", side_effect=RuntimeError("private detail"))
+    @patch("app.workers.tasks.batch_crawl_job.update_state")
+    def test_unexpected_worker_error_preserves_progress(self, update_state, crawl):
+        from app.workers.tasks import batch_crawl_job
+        result = batch_crawl_job.run({"usernames": ["creator"]})
+        self.assertEqual(result["status"], "error")
+        self.assertIn("RuntimeError", result["error"])
+        self.assertNotIn("private detail", result["error"])
+        self.assertEqual(result["progress"]["stage"], "failed")
+        self.assertGreaterEqual(len(result["progress"]["logs"]), 2)
+
     @patch("app.api.routers.crawl_router.is_redis_available", return_value=False)
     def test_unavailable_queue_is_not_reported_as_queued(self, _):
         with self.assertRaises(HTTPException) as caught:

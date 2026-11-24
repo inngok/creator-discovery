@@ -545,10 +545,20 @@ async def get_batch_crawl_job(task_id: str) -> dict:
                 }
             return {"status": "COMPLETED", "task_id": task_id, "result": result}
         if state == "FAILURE":
+            from celery.exceptions import NotRegistered, WorkerLostError
+
+            if isinstance(task_info, NotRegistered):
+                error = "Worker chưa đăng ký tác vụ cào. Cần cập nhật và khởi động lại crawler worker cùng phiên bản API."
+            elif isinstance(task_info, WorkerLostError):
+                error = "Crawler worker dừng đột ngột trong lúc thu thập. Kiểm tra tài nguyên và khởi động lại worker."
+            else:
+                error_type = type(task_info).__name__ if isinstance(task_info, BaseException) else "UnknownError"
+                error = f"Thu thập thất bại ({error_type}); mã tác vụ: {task_id}"
+            logger.error("Batch crawl task %s failed: %r", task_id, task_info)
             response: dict[str, Any] = {
                 "status": "FAILED",
                 "task_id": task_id,
-                "error": "Batch crawl failed; inspect crawler worker logs",
+                "error": error,
             }
             if progress:
                 response["progress"] = progress

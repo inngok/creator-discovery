@@ -527,6 +527,7 @@ def auto_refresh_creators_in_db_task(self, limit: int = 25) -> dict:
 @app.task(name="app.workers.tasks.batch_crawl_job", track_started=True, bind=True)
 def batch_crawl_job(self, payload: dict) -> dict:
     import asyncio
+    from threading import Lock
     from fastapi import HTTPException
     from app.api.routers.crawl_router import BatchCrawlRequest, batch_crawl_kocs
     from app.core.crawl_progress import (
@@ -534,6 +535,9 @@ def batch_crawl_job(self, payload: dict) -> dict:
         set_crawl_progress_callback,
     )
 
+    # Celery's request is thread-local; discovery reports from asyncio.to_thread.
+    task_id = self.request.id
+    progress_lock = Lock()
     progress: dict[str, Any] = {
         "logs": [],
         "current_keyword": "",
@@ -542,13 +546,14 @@ def batch_crawl_job(self, payload: dict) -> dict:
     }
 
     def publish_progress(event):
-        message = event["message"]
-        timestamp = datetime.now().astimezone().strftime("[%H:%M:%S]")
-        progress["logs"] = [f"{timestamp} {message}", *progress["logs"][:39]]
-        progress["current_keyword"] = event.get("keyword") or progress["current_keyword"]
-        progress["platform"] = event.get("platform") or progress["platform"]
-        progress["stage"] = event.get("stage") or progress["stage"]
-        self.update_state(state="PROGRESS", meta={"progress": dict(progress)})
+        with progress_lock:
+            message = event["message"]
+            timestamp = datetime.now().astimezone().strftime("[%H:%M:%S]")
+            progress["logs"] = [f"{timestamp} {message}", *progress["logs"][:39]]
+            progress["current_keyword"] = event.get("keyword") or progress["current_keyword"]
+            progress["platform"] = event.get("platform") or progress["platform"]
+            progress["stage"] = event.get("stage") or progress["stage"]
+            self.update_state(task_id=task_id, state="PROGRESS", meta={"progress": dict(progress)})
 
     token = set_crawl_progress_callback(publish_progress)
     try:
@@ -557,5 +562,10 @@ def batch_crawl_job(self, payload: dict) -> dict:
     except HTTPException as exc:
         publish_progress({"message": f"Tác vụ thất bại: {exc.detail}", "stage": "failed"})
         return {"status": "error", "error": str(exc.detail), "progress": dict(progress)}
+    except Exception as exc:
+        logger.exception("Batch crawl job failed (task_id=%s)", task_id)
+        error = f"Thu thập thất bại ({type(exc).__name__}); mã tác vụ: {task_id}"
+        publish_progress({"message": error, "stage": "failed"})
+        return {"status": "error", "error": error, "progress": dict(progress)}
     finally:
         reset_crawl_progress_callback(token)

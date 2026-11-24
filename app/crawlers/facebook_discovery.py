@@ -74,6 +74,8 @@ def search_new_facebook_candidates(
                 bing_query = f"site:facebook.com {keyword}"
                 searches.append((keyword, f"https://www.bing.com/search?q={urllib.parse.quote(bing_query)}&count=25", None))
 
+            # Try hashtags for every requested term before Pages or external indexes.
+            searches.sort(key=lambda search: 0 if search[2] is True else (1 if search[2] is False else 2))
             searches = deque(searches)
             while searches:
                 kw, search_url, is_hashtag = searches.popleft()
@@ -138,6 +140,10 @@ def search_new_facebook_candidates(
                             continue
 
                         cand["platform"] = "FACEBOOK"
+                        cand["source"] = "FACEBOOK_HASHTAG" if is_hashtag is True else (
+                            "FACEBOOK_PAGES" if is_hashtag is False else "BING")
+                        cand["search_keyword"] = kw
+                        cand["requested_category"] = requested_category
                         if profile_checks >= verification_budget:
                             break
                         profile_checks += 1

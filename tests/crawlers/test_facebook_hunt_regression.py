@@ -8,6 +8,29 @@ from app.crawlers.facebook_crawler import parse_stat_number, extract_facebook_fo
 from app.services.category_discovery_service import CategoryDiscoveryService
 
 class FacebookHuntRegressionTest(unittest.TestCase):
+    @patch("app.crawlers.facebook_discovery.sync_playwright")
+    @patch("app.crawlers.facebook_crawler._init_facebook_playwright_context")
+    def test_all_keyword_hashtags_precede_pages_and_bing(self, initialize, playwright):
+        from unittest.mock import MagicMock
+        from app.crawlers.facebook_discovery import search_new_facebook_candidates
+        context = MagicMock()
+        initialize.return_value = (context, None)
+        page = context.new_page.return_value
+        page.goto.return_value.status = 200
+        page.url = "https://www.facebook.com/hashtag/tech"
+
+        def navigate(url, **kwargs):
+            page.content.return_value = ('<div role="article"><h2><a href="/tech.creator">Creator</a></h2></div>'
+                                         if url.endswith("/hashtag/tech") else "")
+            return SimpleNamespace(status=200)
+
+        page.goto.side_effect = navigate
+        with patch("app.crawlers.facebook_crawler.dismiss_facebook_dialogs"):
+            rows = search_new_facebook_candidates(["food", "tech"], max_total=1)
+        self.assertEqual([call.args[0] for call in page.goto.call_args_list], [
+            "https://www.facebook.com/hashtag/food", "https://www.facebook.com/hashtag/tech"])
+        self.assertEqual(rows[0]["source"], "FACEBOOK_HASHTAG")
+
     def setUp(self):
         for target in ("verify_discovery_profile", "matches_requested_topic"):
             checker = patch(f"app.crawlers.facebook_discovery.{target}", return_value=True)

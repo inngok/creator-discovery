@@ -13,7 +13,8 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
         with self.assertRaises(discovery.TikTokDiscoveryError):
             discovery._ensure_search_available(page, SimpleNamespace(status=200))
 
-    def search(self, pages, topic_match=lambda c, k: True, limit=1):
+    def search(self, pages, topic_match=lambda c, k: True, limit=1,
+               keywords=None, indexed_results=None):
         page = MagicMock()
         page.content.side_effect = pages
         context = MagicMock()
@@ -25,7 +26,9 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
             stack.enter_context(patch("app.services.crawled_result_service.get_crawled_tiktok_identifiers", return_value=set()))
             stack.enter_context(patch.object(discovery, "_trending_matches_topic", side_effect=topic_match))
             stack.enter_context(patch.object(discovery, "_run_profile_check", return_value=True))
-            result = discovery.search_new_tiktok_candidates(["travel"], max_total=limit)
+            stack.enter_context(patch.object(discovery, "_search_indexed_tiktok_candidates",
+                                            return_value=indexed_results or []))
+            result = discovery.search_new_tiktok_candidates(keywords or ["travel"], max_total=limit)
         return result, page
 
     @staticmethod
@@ -64,6 +67,25 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
         self.assertEqual(results, [])
         self.assertEqual(page.goto.call_count, 1)
         self.assertIn("/search?q=", page.goto.call_args.args[0])
+
+    def test_empty_search_uses_verified_index_results(self):
+        results, _ = self.search(["", "", ""], indexed_results=[{"username": "verified"}])
+        self.assertEqual(results, [{"username": "verified"}])
+
+    def test_filtered_search_uses_verified_index_results(self):
+        html = self.card("unrelated", "Unrelated video about a different topic")
+        results, _ = self.search([html] * 3, topic_match=lambda c, k: False,
+                                 indexed_results=[{"username": "verified"}])
+        self.assertEqual(results, [{"username": "verified"}])
+
+    def test_single_output_quota_still_checks_later_keywords(self):
+        pages = ["".join(self.card(f"unrelated{kw}{i}", "Unrelated video caption")
+                         for i in range(3)) for kw in range(3)]
+        pages.append(self.card("matching", "Matching creator daily family vlog"))
+        results, page = self.search(pages, keywords=["home", "health", "decor", "family"],
+                                    topic_match=lambda c, k: c["username"] == "matching")
+        self.assertEqual([c["username"] for c in results], ["matching"])
+        self.assertEqual(page.goto.call_count, 4)
 
     def test_topic_rejection_cannot_be_overridden_by_keyword_overlap(self):
         fake = SimpleNamespace(get_llm_enrichment=lambda _: {

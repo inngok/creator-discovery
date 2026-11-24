@@ -109,7 +109,7 @@ def _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requ
     found = []
     seen = get_crawled_tiktok_identifiers()
     checked = 0
-    budget = min(max_total * 3, 30)
+    budget = min(max(max_total * 3, len(keywords) * 3), 30)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
@@ -176,7 +176,8 @@ def search_new_tiktok_candidates(
     search_errors = []
     search_source_available = False
     verified_count = 0
-    verification_budget = min(max_total * 3, 30)
+    # Output quota must not exhaust the search after the first keyword.
+    verification_budget = min(max(max_total * 3, len(keywords) * 3), 30)
     per_keyword_budget = max(3, verification_budget // max(1, len(keywords)))
     checked_profiles = {}
 
@@ -263,12 +264,14 @@ def search_new_tiktok_candidates(
             search_errors.append(f"Playwright: {type(e).__name__}")
             logger.error(f"[DISCOVERY] Lỗi khởi tạo Playwright Discovery: {e}")
 
-    if not discovered and search_errors and not search_source_available:
+    # Empty/filtered search cards also need a second source, not only HTTP errors.
+    if not discovered:
         try:
             recovered = _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requested_category)
             if recovered:
                 return recovered
         except Exception as error:
             logger.warning("TikTok indexed fallback unavailable: %s", type(error).__name__)
-        raise TikTokDiscoveryError("TikTok search and verified topic discovery failed: " + "; ".join(search_errors[:5]))
+        if search_errors and not search_source_available:
+            raise TikTokDiscoveryError("TikTok search and verified topic discovery failed: " + "; ".join(search_errors[:5]))
     return discovered

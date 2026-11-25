@@ -7,9 +7,18 @@ from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
+from app.core.crawl_progress import (
+    build_discovery_rejection_result,
+    report_crawl_progress,
+    report_discovery_rejection,
+)
 from app.crawlers.search_extractor import evaluate_tier0_search_card
 from app.crawlers.tiktok_discovery import _run_profile_check
-from app.services.discovery_verification import verify_discovery_profile, matches_requested_topic
+from app.services.discovery_verification import (
+    TopicVerificationUnavailable,
+    matches_requested_topic,
+    verify_discovery_profile,
+)
 
 logger = setup_logger("facebook_discovery")
 
@@ -73,6 +82,8 @@ def search_new_facebook_candidates(
                 bing_query = f"site:facebook.com {keyword}"
                 searches.append((keyword, f"https://www.bing.com/search?q={urllib.parse.quote(bing_query)}&count=25", None))
 
+            # Try hashtags for every requested term before Pages or external indexes.
+            searches.sort(key=lambda search: 0 if search[2] is True else (1 if search[2] is False else 2))
             searches = deque(searches)
             while searches:
                 kw, search_url, is_hashtag = searches.popleft()
@@ -82,6 +93,15 @@ def search_new_facebook_candidates(
                     continue
 
                 logger.info(f"[DISCOVERY FB] Đang quét từ khóa Facebook: '{kw}'...")
+                source = "Bing" if "bing.com" in search_url else (
+                    "hashtag" if is_hashtag else "Pages"
+                )
+                report_crawl_progress(
+                    f"Facebook: đang tìm '{kw}' trên {source}.",
+                    platform="FACEBOOK",
+                    keyword=kw,
+                    stage="search",
+                )
 
                 try:
                     response = page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
@@ -128,12 +148,30 @@ def search_new_facebook_candidates(
                             continue
 
                         cand["platform"] = "FACEBOOK"
+                        cand["source"] = "FACEBOOK_HASHTAG" if is_hashtag is True else (
+                            "FACEBOOK_PAGES" if is_hashtag is False else "BING")
+                        cand["search_keyword"] = kw
+                        cand["requested_category"] = requested_category
                         if profile_checks >= verification_budget:
                             break
                         profile_checks += 1
+                        report_crawl_progress(
+                            f"Facebook: đang xác minh hồ sơ @{username}.",
+                            platform="FACEBOOK",
+                            keyword=kw,
+                            stage="profile_verification",
+                        )
                         if not _run_profile_check(verify_discovery_profile, cand):
                             continue
                         if not matches_requested_topic(cand, f"{requested_category or ''}; {kw}"):
+                            report_discovery_rejection(build_discovery_rejection_result(
+                                cand,
+                                reason_codes=[
+                                    *((cand.get("creator_check") or {}).get("reason_codes") or []),
+                                    "TOPIC_NOT_MATCHED",
+                                ],
+                                summary_reason=f"Nội dung chưa đủ bằng chứng khớp chủ đề '{kw or requested_category or ''}'.",
+                            ))
                             continue
                         discovered.append(cand)
                         kw_count += 1
@@ -145,13 +183,44 @@ def search_new_facebook_candidates(
                     logger.info(
                         f"[DISCOVERY FB] Quét xong từ khóa '{kw}': Tìm thấy {kw_count} Fanpage/KOC tiềm năng."
                     )
+                    report_crawl_progress(
+                        f"Facebook: xong '{kw}' trên {source}, có {kw_count} ứng viên đạt điều kiện.",
+                        platform="FACEBOOK",
+                        keyword=kw,
+                        stage="search_complete",
+                    )
                     page.wait_for_timeout(2000)
 
+                except TopicVerificationUnavailable:
+                    # AI không khả dụng: giữ ứng viên hiện tại cần duyệt thủ công, tiếp tục source tiếp theo
+                    # (cand vẫn ở local scope — thêm vào discovered nếu pass tier0)
+                    try:
+                        _cand = cand  # noqa: F821  – defined in loop above when exception fires
+                        _cand["requires_manual_review"] = True
+                        if evaluate_tier0_search_card(_cand)[0] and _cand not in discovered:
+                            discovered.append(_cand)
+                            kw_count += 1
+                            keyword_counts[kw] = kw_count
+                    except Exception:
+                        pass
+                    continue
                 except FacebookDiscoveryError as access_error:
                     access_errors.append(access_error)
+                    report_crawl_progress(
+                        f"Facebook: {source} không cho truy cập công khai, chuyển nguồn khác.",
+                        platform="FACEBOOK",
+                        keyword=kw,
+                        stage="source_error",
+                    )
                     continue
                 except Exception as kw_err:
                     logger.warning(f"[DISCOVERY FB] Lỗi khi quét từ khóa '{kw}': {kw_err}")
+                    report_crawl_progress(
+                        f"Facebook: lỗi khi tìm '{kw}' trên {source}, thử tiếp nguồn khác.",
+                        platform="FACEBOOK",
+                        keyword=kw,
+                        stage="source_error",
+                    )
                     target_closed = ("Target page, context or browser has been closed" in str(kw_err)
                                      or page.is_closed() is True
                                      or (context.browser and context.browser.is_connected() is False))

@@ -2,12 +2,15 @@ import json
 import os
 import re
 import urllib.parse
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
 from app.ai.rules.signal_extractor import PostPreview, ProfileMetadata
+from app.core.post_dates import normalize_post_date
 from app.core.logger import setup_logger
 from app.crawlers.facebook_crawler import (
     _init_facebook_playwright_context,
@@ -22,9 +25,70 @@ from app.crawlers.instagram_crawler import (
 from app.crawlers.tiktok_crawler import _init_playwright_context
 
 logger = setup_logger("preflight_fetcher")
+_fast_discovery_mode: ContextVar[bool] = ContextVar("fast_discovery_mode", default=False)
 
 
-def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
+@contextmanager
+def fast_discovery_fetch():
+    """Fetch only enough recent TikTok posts for discovery verification."""
+    token = _fast_discovery_mode.set(True)
+    try:
+        yield
+    finally:
+        _fast_discovery_mode.reset(token)
+
+
+def normalize_tiktok_item_list(items: list, username: str) -> list[dict]:
+    """Deduplicate owned TikTok posts and put the newest dated posts first."""
+    if not isinstance(items, list):
+        return []
+    clean_user = username.strip().removeprefix("@").casefold()
+    by_id: dict[str, dict] = {}
+    source_order: dict[str, int] = {}
+
+    def merge_nonempty(existing: dict, incoming: dict) -> dict:
+        merged = dict(existing)
+        for key, value in incoming.items():
+            previous = merged.get(key)
+            if isinstance(previous, dict) and isinstance(value, dict):
+                merged[key] = merge_nonempty(previous, value)
+            elif (key not in merged or previous in (None, "", {})
+                  or (previous == 0 and value not in (None, "", {}, 0))):
+                merged[key] = value
+        return merged
+
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        post_id = str(item.get("id", "")).strip()
+        if not post_id:
+            continue
+        author = item.get("author") or {}
+        author_name = author.get("uniqueId", "") if isinstance(author, dict) else ""
+        if isinstance(author_name, str) and author_name and author_name.casefold() != clean_user:
+            continue
+        if post_id in by_id:
+            by_id[post_id] = merge_nonempty(by_id[post_id], item)
+        else:
+            by_id[post_id] = dict(item)
+            source_order[post_id] = index
+
+    def order(entry: tuple[str, dict]) -> tuple[bool, float, int]:
+        post_id, item = entry
+        published = normalize_post_date(item.get("createTime") or item.get("postedAt"))
+        if published:
+            timestamp = datetime.fromisoformat(published.replace("Z", "+00:00")).timestamp()
+            return False, -timestamp, source_order[post_id]
+        return True, 0, source_order[post_id]
+
+    return [item for _, item in sorted(by_id.items(), key=order)]
+
+
+def fetch_tiktok_ssr_raw_data(
+    username: str,
+    max_posts: int | None = None,
+    max_scrolls: int | None = None,
+) -> dict | None:
     """
     Lightweight SSR Fetcher chung cho TikTok:
     - Tải DOM (`domcontentloaded`) với timeout ngắn.
@@ -33,6 +97,9 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
     - Chờ thẻ <script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"> chứa dữ liệu SSR profile.
     - Trả về dictionary dữ liệu SSR đã được parse kèm mảng itemList video.
     """
+    fast_mode = _fast_discovery_mode.get()
+    target_posts = max_posts if max_posts is not None else (18 if fast_mode else 60)
+    scroll_limit = max_scrolls if max_scrolls is not None else (2 if fast_mode else 8)
     clean_user = username.strip().removeprefix("@")
     if "tiktok.com" in clean_user:
         match = re.search(r"tiktok\.com/@?([^/?&#]+)", clean_user)
@@ -41,6 +108,7 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
 
     url = f"https://www.tiktok.com/@{clean_user}"
     captured_posts: list[dict] = []
+    captured_ids: set[str] = set()
 
     with sync_playwright() as p:
         context, _ = _init_playwright_context(p)
@@ -58,13 +126,16 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
                         for item in items:
                             author = item.get("author") or {}
                             author_name = author.get("uniqueId", "") if isinstance(author, dict) else ""
-                            if author_name and author_name.casefold() != clean_user.casefold():
+                            if (isinstance(author_name, str) and author_name
+                                    and author_name.casefold() != clean_user.casefold()):
                                 continue
-                            if (item.get("id") and len(captured_posts) < 12
-                                    and not any(str(p.get("id")) == str(item["id"]) for p in captured_posts)):
+                            post_id = str(item.get("id", "")).strip()
+                            if post_id and len(captured_posts) < target_posts and post_id not in captured_ids:
                                 captured_posts.append(item)
-                except Exception:
-                    pass
+                                captured_ids.add(post_id)
+                except Exception as error:
+                    logger.warning("[PREFLIGHT] TikTok post response parse failed: %s",
+                                   type(error).__name__)
 
         page.on("response", handle_response)
 
@@ -76,14 +147,26 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
                 pass
 
             # Cuộn xuống từng đợt để kích hoạt lazy-load các hàng video tiếp theo (tránh chỉ dừng ở 3 bài ghim đầu)
-            for _ in range(4):
-                if len(captured_posts) >= 12:
+            idle_scrolls = 0
+            wait_steps = 4 if fast_mode else 6
+            for _ in range(scroll_limit):
+                if len(captured_posts) >= target_posts:
                     break
+                previous_count = len(captured_posts)
                 try:
                     page.evaluate("window.scrollBy(0, 1500);")
                 except Exception:
                     break
-                page.wait_for_timeout(600)
+                for _ in range(wait_steps):
+                    page.wait_for_timeout(250)
+                    if len(captured_posts) > previous_count:
+                        break
+                if len(captured_posts) == previous_count:
+                    idle_scrolls += 1
+                    if idle_scrolls >= (1 if fast_mode else 2):
+                        break
+                else:
+                    idle_scrolls = 0
 
             content = page.content()
         except Exception as e:
@@ -105,13 +188,16 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
         return None
 
     # Dự phòng bóc video trực tiếp từ DOM nếu API post/item_list chưa bắt đủ
-    ssr_posts = data.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("itemList", []) or data.get("itemList", [])
-    for item in ssr_posts:
-        if item.get("id") and not any(str(p.get("id")) == str(item["id"]) for p in captured_posts):
-            captured_posts.append(item)
-    if len(captured_posts) < 12:
+    ssr_posts = data.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("itemList", [])
+    root_posts = data.get("itemList", [])
+    if not isinstance(ssr_posts, list):
+        ssr_posts = []
+    if not isinstance(root_posts, list):
+        root_posts = []
+    dom_posts = []
+    if len(captured_posts) < target_posts:
         for a in soup.select("a[href*='/video/'], a[href*='/photo/']"):
-            if len(captured_posts) >= 12:
+            if len(captured_posts) + len(dom_posts) >= target_posts:
                 break
             href = a.get("href", "")
             if not re.search(r"/@" + re.escape(clean_user) + r"/(?:video|photo)/", href, re.IGNORECASE):
@@ -122,16 +208,21 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
             desc = text or alt
             pattern = "/video/" if "/video/" in href else "/photo/"
             pid = href.split(pattern)[-1].split("?")[0] if pattern in href else ""
-            if pid and not any(str(p.get("id")) == pid for p in captured_posts):
+            if pid and pid not in captured_ids:
                 parent_text = a.parent.get_text(strip=True) if a.parent else ""
                 is_pinned = "Ghim" in text or "Pinned" in text or "Ghim" in parent_text or "Pinned" in parent_text
-                captured_posts.append({
+                dom_posts.append({
                     "id": pid,
                     "desc": desc,
                     "stats": {"playCount": 0, "diggCount": 0, "commentCount": 0, "shareCount": 0},
                     "video": {"cover": img.get("src", "") if img else ""},
                     "isPinned": is_pinned,
                 })
+                captured_ids.add(pid)
+
+    captured_posts = normalize_tiktok_item_list(
+        [*captured_posts, *ssr_posts, *root_posts, *dom_posts], clean_user
+    )
 
     if captured_posts:
         data["itemList"] = captured_posts
@@ -162,7 +253,15 @@ def fetch_tiktok_author_info(username: str) -> dict | None:
         return None
 
     external_id = str(user_info.get("id", "")).strip()
-    unique_id = str(user_info.get("uniqueId", username.strip().removeprefix("@"))).strip()
+    unique_id = user_info.get("uniqueId")
+    if (
+        not re.fullmatch(r"[1-9][0-9]{0,19}", external_id)
+        or not isinstance(unique_id, str)
+        or not unique_id.strip()
+    ):
+        return None
+    unique_id = unique_id.strip()
+    observed_at = datetime.now(UTC).isoformat()
     display_name = user_info.get("nickname", unique_id)
     sec_uid = str(user_info.get("secUid", "")).strip()
     followers = int(stats_module.get("followerCount", 0))
@@ -191,6 +290,8 @@ def fetch_tiktok_author_info(username: str) -> dict | None:
 
     return {
         "author_id": external_id,
+        "id_type": "TIKTOK_USER_ID",
+        "observed_at": observed_at,
         "unique_id": unique_id,
         "display_name": display_name,
         "sec_uid": sec_uid,
@@ -280,18 +381,11 @@ def fetch_tiktok_preflight(username: str) -> tuple[ProfileMetadata, list[PostPre
         # Thử tìm trong các scope khác của SSR
         item_list = data.get("itemList", [])
 
-    for item in item_list[:10]:
+    for item in normalize_tiktok_item_list(item_list, clean_user)[:10]:
         pid = str(item.get("id", ""))
         caption = item.get("desc", "")
         stats = item.get("stats", {}) or {}
-        create_time = item.get("createTime")
-        posted_at = None
-        if create_time:
-            try:
-                dt = datetime.fromtimestamp(int(create_time), tz=UTC)
-                posted_at = dt.isoformat()
-            except Exception:
-                pass
+        posted_at = normalize_post_date(item.get("createTime") or item.get("postedAt"))
 
         posts.append(PostPreview(
             post_id=pid,

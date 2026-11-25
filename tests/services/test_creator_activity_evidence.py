@@ -42,11 +42,11 @@ class CreatorActivityEvidenceTest(unittest.TestCase):
         self.assertEqual(mapped["observedAt"], "2024-01-01T00:00:00")
         self.assertEqual([p.platformPostId for p in posts], ["1", "2", "3", "4"])
 
-    def test_undated_evidence_survives_three_post_cap_to_avoid_false_inactivity(self):
+    def test_undated_evidence_does_not_displace_dated_recent_posts(self):
         mapped = self.map_posts([*[self.post(str(i), "2024-01-01") for i in range(4)],
                                  self.post("undated", None)])
-        self.assertIn("undated", [p["platformPostId"] for p in mapped["recentPosts"][:3]])
-        self.assertEqual(mapped["recentPosts"][0]["postedAt"], "")
+        self.assertNotIn("undated", [p["platformPostId"] for p in mapped["recentPosts"][:3]])
+        self.assertEqual(mapped["recentPosts"][-1]["platformPostId"], "undated")
 
     def test_facebook_uses_explicit_article_timestamps(self):
         for element in ('<time datetime="2024-01-01T07:00:00+07:00"></time>',

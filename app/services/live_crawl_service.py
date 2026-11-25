@@ -1,10 +1,11 @@
+import math
 import re
 import time
 from datetime import UTC, datetime
 from typing import Any
 
 from app.ai.rules.rule_config import ProcessingStatus, Decision
-from app.ai.rules.rule_engine import RuleEngine
+from app.ai.rules.rule_engine import RuleDecisionResult, RuleEngine
 from app.ai.rules.signal_extractor import PostPreview, ProfileMetadata
 from app.core.candidate_staging import CandidateStagingRecord, staging_repo
 from app.core.logger import setup_logger
@@ -13,6 +14,48 @@ from app.services.live_fetcher_service import fetch_raw_creator_profile
 from app.services.live_sync_service import append_to_crawled_results, sync_creator_to_java_backend
 
 logger = setup_logger("live_crawl_service")
+
+
+def _apply_verified_topic_auto_accept(
+    result: RuleDecisionResult, verified_snapshot: dict | None
+) -> RuleDecisionResult:
+    if result.decision not in {Decision.SKIP_INSUFFICIENT, Decision.NEEDS_MANAGER_REVIEW}:
+        return result
+    topic_accept = (verified_snapshot or {}).get("topic_auto_accept")
+    if not isinstance(topic_accept, dict):
+        return result
+    creator_type = topic_accept.get("creator_type")
+    confidence = topic_accept.get("confidence")
+    evidence = topic_accept.get("evidence")
+    if (creator_type not in {"KOC", "KOL"} or type(confidence) not in {int, float}
+            or not math.isfinite(confidence) or not 0.75 <= confidence <= 1
+            or not isinstance(evidence, list)):
+        return result
+    snapshot_posts = verified_snapshot.get("posts")
+    if not isinstance(snapshot_posts, list):
+        return result
+    sources = {
+        post.get("platformPostId"): post.get("caption", "")
+        for post in snapshot_posts
+        if isinstance(post, dict) and isinstance(post.get("platformPostId"), str)
+        and isinstance(post.get("caption"), str)
+    }
+    proven_posts = set()
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        post_id, quote = item.get("postId"), item.get("quote")
+        if (isinstance(post_id, str) and isinstance(quote, str) and len(quote.strip()) >= 10
+                and quote.casefold() in sources.get(post_id, "").casefold()):
+            proven_posts.add(post_id)
+    if len(proven_posts) < 2:
+        return result
+    return result.model_copy(update={
+        "decision": Decision.AUTO_ACCEPT_KOC if creator_type == "KOC" else Decision.AUTO_ACCEPT_KOL,
+        "primary_type": creator_type,
+        "reason_codes": [*result.reason_codes, "DISCOVERY_TOPIC_AUTO_ACCEPT"],
+        "evidence": {**result.evidence, "topic_auto_accept": topic_accept},
+    })
 
 
 def clean_username_from_input(val: str, platform: str = "TIKTOK") -> str:
@@ -51,9 +94,11 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK",
     logger.info(f"[LIVE CRAWL] Bắt đầu cào trực tiếp cho @{clean_user} ({platform_upper})...")
 
     # 1. Bóc tách dữ liệu profile và clips theo nền tảng
+    active_verified_snapshot = None
     if (verified_snapshot and verified_snapshot.get("platform") == platform_upper
             and verified_snapshot.get("username", "").casefold() == clean_user.casefold()
             and 0 <= time.time() - verified_snapshot.get("verified_at", 0) <= 300):
+        active_verified_snapshot = verified_snapshot
         profile_dict = verified_snapshot["profile"]
         recent_posts = verified_snapshot["posts"]
         err_resp = None
@@ -118,6 +163,10 @@ def crawl_single_koc_live(username_or_url: str, platform: str = "TIKTOK",
             )
         except Exception as exc:
             logger.warning("AI second opinion failed in live crawl: %s", type(exc).__name__)
+
+    decision_result = _apply_verified_topic_auto_accept(
+        decision_result, active_verified_snapshot
+    )
 
     # 3. Lưu Staging DB
     staging_record = CandidateStagingRecord(

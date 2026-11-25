@@ -131,6 +131,47 @@ class TestLiveCrawlAndMetrics(unittest.TestCase):
         self.assertEqual(data["summary"]["total_requested"], 2)
         self.assertEqual(len(data["results"]), 2)
 
+    @patch("app.api.routers.crawl_router.crawl_single_koc_live")
+    @patch("app.api.routers.crawl_router.category_discovery_service.get_candidates_by_category")
+    def test_batch_crawl_includes_discovery_rejections_without_syncing_db(self, discover, crawl):
+        from app.core.crawl_progress import report_discovery_rejection
+
+        def fake_discover(*args, **kwargs):
+            report_discovery_rejection({
+                "status": "success",
+                "platform": "TIKTOK",
+                "username": "offtopic_creator",
+                "display_name": "Offtopic",
+                "followers": 20000,
+                "decision": "AUTO_REJECT",
+                "primary_type": "UNKNOWN",
+                "reason_codes": ["TOPIC_NOT_MATCHED"],
+                "database_synced": False,
+                "sync_error": "Nội dung chưa khớp chủ đề",
+            })
+            return [{"username": "tech_creator", "platform": "TIKTOK"}]
+
+        discover.side_effect = fake_discover
+        crawl.return_value = {
+            "status": "success",
+            "platform": "TIKTOK",
+            "username": "tech_creator",
+            "decision": "AUTO_ACCEPT_KOC",
+            "primary_type": "KOC",
+            "database_synced": True,
+            "latency_ms": 12.0,
+        }
+        response = self.client.post("/api/v1/crawl/batch-crawl", json={
+            "platform": "TIKTOK", "category": "TECH", "keywords": ["review"], "max_channels": 3})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["summary"]["attempted_count"], 1)
+        self.assertEqual(data["summary"]["failed_count"], 0)
+        self.assertEqual([r["username"] for r in data["results"]], ["tech_creator", "offtopic_creator"])
+        self.assertEqual(data["results"][1]["decision"], "AUTO_REJECT")
+        self.assertFalse(data["results"][1]["database_synced"])
+        crawl.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

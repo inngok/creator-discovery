@@ -1,11 +1,18 @@
 import os
 import re
+import unicodedata
 import urllib.parse
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
+from app.core.crawl_progress import (
+    build_discovery_rejection_result,
+    report_crawl_progress,
+    report_discovery_rejection,
+)
+from app.services.discovery_verification import TopicVerificationUnavailable
 from app.crawlers.search_extractor import (
     evaluate_tier0_search_card,
     parse_follower_string,
@@ -135,143 +142,220 @@ def _extract_candidates_from_search_html(html: str) -> list[dict]:
     return candidates
 
 
+def _instagram_hashtags(keyword: str) -> list[str]:
+    tag = re.sub(r"\s+", "", keyword.strip().lstrip("#"))
+    plain = "".join(c for c in unicodedata.normalize("NFD", tag.replace("đ", "d").replace("Đ", "D"))
+                    if not unicodedata.combining(c))
+    return list(dict.fromkeys(t for t in (tag, plain) if t))
+
+
+def _extract_instagram_hashtag_authors(html: str, post_url: str = "") -> list[dict]:
+    """Only post owners and article headers establish authors, never commenters."""
+    from app.crawlers.meta_public_data import embedded_payloads, dictionaries
+    soup = BeautifulSoup(html, "html.parser")
+    authors = {}
+
+    def add(username, name="", url=""):
+        username = _clean_instagram_username(username) if isinstance(username, str) else None
+        if username:
+            authors.setdefault(username.casefold(), {
+                "username": username, "display_name": name or username,
+                "followers": 0, "bio_snippet": "", "platform": "INSTAGRAM",
+                "profile_url": f"https://www.instagram.com/{username}/",
+                "source": "INSTAGRAM_HASHTAG", "source_post_url": url or post_url,
+            })
+
+    for payload in embedded_payloads(soup):
+        for node in dictionaries(payload):
+            code = node.get("shortcode") or node.get("code")
+            if not isinstance(code, str) or not re.fullmatch(r"[\w-]+", code):
+                continue
+            if post_url and code != urllib.parse.urlsplit(post_url).path.strip("/").split("/")[-1]:
+                continue
+            owner = node.get("owner") or node.get("user")
+            if isinstance(owner, dict):
+                add(owner.get("username"), owner.get("full_name", ""),
+                    f"https://www.instagram.com/p/{code}/")
+    for article in soup.select("article"):
+        post = article.select_one('a[href*="/p/"], a[href*="/reel/"]')
+        url = urllib.parse.urljoin("https://www.instagram.com/", post["href"]) if post else post_url
+        for anchor in article.select("header a[href]"):
+            parsed = urllib.parse.urlsplit(urllib.parse.urljoin("https://www.instagram.com/", anchor["href"]))
+            slug = parsed.path.strip("/")
+            if parsed.hostname in {"instagram.com", "www.instagram.com"} and "/" not in slug:
+                add(slug, anchor.get_text(" ", strip=True), url)
+    return list(authors.values())
+
+
+def _collect_instagram_hashtag_candidates(page, context, url: str, max_posts: int) -> list[dict]:
+    response = page.goto(url, wait_until="domcontentloaded", timeout=20000)
+    status = getattr(response, "status", 200)
+    if isinstance(status, int) and status >= 400:
+        raise InstagramDiscoveryError(f"Instagram hashtag HTTP {status}")
+    page.wait_for_timeout(2500)
+    if isinstance(page.url, str) and any(part in page.url for part in ("/accounts/login", "/challenge", "/checkpoint")):
+        raise InstagramDiscoveryError("Instagram hashtag requires login or verification")
+    authors, posts = {}, {}
+    for viewport in range(3):
+        html = page.content()
+        for candidate in _extract_instagram_hashtag_authors(html):
+            authors.setdefault(candidate["username"].casefold(), candidate)
+        for anchor in BeautifulSoup(html, "html.parser").select('a[href]'):
+            parsed = urllib.parse.urlsplit(urllib.parse.urljoin("https://www.instagram.com/", anchor["href"]))
+            if parsed.hostname in {"instagram.com", "www.instagram.com"} and re.fullmatch(r"/(?:p|reel)/[\w-]+/?", parsed.path):
+                posts.setdefault(parsed.path.rstrip("/"), "https://www.instagram.com" + parsed.path)
+        if len(authors) >= max_posts or len(posts) >= max_posts:
+            break
+        if viewport < 2:
+            page.mouse.wheel(0, 900)
+            page.wait_for_timeout(1000)
+    passwords = page.locator('input[type="password"]:visible').count()
+    if not authors and not posts and isinstance(passwords, int) and passwords > 0:
+        raise InstagramDiscoveryError("Instagram hashtag requires login")
+    covered_posts = {c["source_post_url"].rstrip("/") for c in authors.values() if c["source_post_url"]}
+    detail = None
+    try:
+        for post_url in list(posts.values())[:max_posts]:
+            if post_url.rstrip("/") in covered_posts:
+                continue
+            if detail is None:
+                detail = context.new_page()
+                Stealth().apply_stealth_sync(detail)
+            try:
+                response = detail.goto(post_url, wait_until="domcontentloaded", timeout=15000)
+                if response is not None and isinstance(response.status, int) and response.status >= 400:
+                    continue
+                detail.wait_for_timeout(1500)
+                if isinstance(detail.url, str) and any(part in detail.url for part in ("/accounts/login", "/challenge")):
+                    continue
+                for candidate in _extract_instagram_hashtag_authors(detail.content(), post_url):
+                    authors.setdefault(candidate["username"].casefold(), candidate)
+            except Exception as error:
+                logger.debug("Instagram hashtag post unavailable: %s", type(error).__name__)
+    finally:
+        if detail is not None:
+            detail.close()
+    return list(authors.values())[:max_posts]
+
+
 def search_new_instagram_candidates(
     keywords: list[str], max_per_keyword: int = 10, max_total: int = 30,
     requested_category: str | None = None,
 ) -> list[dict]:
-    """
-    Tự động săn tìm KOC Instagram mới theo từ khóa / lĩnh vực (Beauty, Food, Tech, Fashion...):
-    - Sử dụng kỹ thuật Search Dorking sạch (không cần đăng nhập, không lo checkpoint/khóa tài khoản).
-    - Bóc tách username, display name, follower, bio snippet.
-    - Sàng lọc nhanh qua Tier-0 Pre-filter (loại bỏ shop sỉ lẻ/rác ngay từ snippet).
-    """
-    discovered: list[dict] = []
-    seen_usernames: set[str] = set()
-    checks = 0
-    budget = min(max_total * 3, 30)
-    errors = []
+    """Discover hashtag post owners first; verify profiles before filling quotas."""
+    if max_total <= 0 or max_per_keyword <= 0:
+        return []
+    terms = list(dict.fromkeys(k.strip().lstrip("#").strip() for k in keywords if k.strip().lstrip("#").strip()))
+    if not terms:
+        return []
+    discovered, errors = [], []
+    seen_usernames = set()
+    checks, budget = 0, min(max(max_total * 3, len(terms) * 3), 60)
     accessible = False
+    counts = {}
     browser = None
-
     with sync_playwright() as p:
         try:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-gpu",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
-                ],
-            )
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800},
-            )
+            from app.crawlers.instagram_session import create_instagram_context
+            context = create_instagram_context(p)
+            browser = context.browser
             page = context.new_page()
-            stealth = Stealth()
-            stealth.apply_stealth_sync(page)
-
-            for kw in keywords:
+            Stealth().apply_stealth_sync(page)
+            sources = [(kw, "hashtag", "https://www.instagram.com/explore/tags/" + urllib.parse.quote(tag, safe="") + "/")
+                       for kw in terms for tag in _instagram_hashtags(kw)]
+            # All native hashtag pages run before any external search provider.
+            for provider in ("Google", "DuckDuckGo", "Bing"):
+                for kw in terms:
+                    query = urllib.parse.quote(f'site:instagram.com "{kw}" Vietnam -inurl:p -inurl:reel -inurl:explore')
+                    url = {"Google": f"https://www.google.com/search?q={query}&num=25&hl=vi&gl=vn",
+                           "DuckDuckGo": f"https://html.duckduckgo.com/html/?q={query}",
+                           "Bing": f"https://www.bing.com/search?q={query}&count=25"}[provider]
+                    sources.append((kw, provider, url))
+            for kw, source, url in sources:
                 if len(discovered) >= max_total or checks >= budget:
                     break
-
-                clean_kw = kw.strip().lstrip("#").strip()
-                if not clean_kw:
+                if counts.get(kw, 0) >= max_per_keyword:
                     continue
-
-                logger.info(f"[INSTAGRAM DISCOVERY] Đang quét KOC Instagram ngành: '{clean_kw}'...")
-
-                # 1. Thử quét qua Google Dorking
-                query = f'site:instagram.com "{clean_kw}" ("Việt Nam" OR "Vietnam") -inurl:p -inurl:reel -inurl:explore'
-                encoded_q = urllib.parse.quote(query)
-                search_url = f"https://www.google.com/search?q={encoded_q}&num=25&hl=vi&gl=vn&lr=lang_vi"
-
-                candidates: list[dict] = []
-                try:
-                    response = page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
-                    status = getattr(response, "status", 200)
-                    if isinstance(status, int) and status >= 400:
-                        raise InstagramDiscoveryError(f"Public search index HTTP {status}")
-                    page.wait_for_timeout(1500)
-                    _ensure_index_available(page)
-                    candidates = _extract_candidates_from_search_html(page.content())
-                    accessible = True
-                except Exception as g_err:
-                    errors.append(str(g_err))
-                    logger.debug(f"[INSTAGRAM DISCOVERY] Google search '{clean_kw}' gặp lỗi: {g_err}")
-
-                # Search providers are independent; one provider being blocked must not end discovery.
-                if len(candidates) < 3:
-                    try:
-                        ddg_query = f'site:instagram.com "{clean_kw}" "Vietnam"'
-                        ddg_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(ddg_query)}"
-                        response = page.goto(ddg_url, wait_until="domcontentloaded", timeout=12000)
-                        status = getattr(response, "status", 200)
-                        if isinstance(status, int) and status >= 400:
-                            raise InstagramDiscoveryError(f"Public search index HTTP {status}")
-                        page.wait_for_timeout(1000)
-                        _ensure_index_available(page)
-                        ddg_candidates = _extract_candidates_from_search_html(page.content())
-                        candidates.extend(ddg_candidates)
-                        accessible = True
-                    except Exception as ddg_err:
-                        errors.append(str(ddg_err))
-                        logger.debug(f"[INSTAGRAM DISCOVERY] DuckDuckGo search '{clean_kw}' gặp lỗi: {ddg_err}")
-
-                if len(candidates) < 3:
-                    try:
-                        bing_query = f"site:instagram.com {clean_kw} Vietnam"
-                        bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(bing_query)}&count=25"
-                        response = page.goto(bing_url, wait_until="domcontentloaded", timeout=15000)
-                        status = getattr(response, "status", 200)
-                        if isinstance(status, int) and status >= 400:
-                            raise InstagramDiscoveryError(f"Public search index HTTP {status}")
-                        page.wait_for_timeout(1000)
-                        _ensure_index_available(page)
-                        candidates.extend(_extract_candidates_from_search_html(page.content()))
-                        accessible = True
-                    except Exception as bing_err:
-                        errors.append(str(bing_err))
-                        logger.debug(f"[INSTAGRAM DISCOVERY] Bing search '{clean_kw}' gặp lỗi: {bing_err}")
-
-                kw_count = 0
-                for cand in candidates:
-                    uname = cand["username"].lower()
-                    if uname in seen_usernames:
-                        continue
-                    seen_usernames.add(uname)
-
-                    # Tier-0 Filter: Loại nhanh các tài khoản shop sỉ/lẻ lộ liễu từ snippet
-                    passed, reason = evaluate_tier0_search_card(cand)
-                    if not passed:
-                        logger.debug(f"[INSTAGRAM DISCOVERY] Bỏ qua @{cand['username']}: {reason}")
-                        continue
-
-                    if checks >= budget:
-                        break
-                    checks += 1
-                    cand["search_keyword"] = clean_kw
-                    cand["requested_category"] = requested_category
-                    if not _verify_instagram_candidate(cand, f"{requested_category or ''}; {clean_kw}"):
-                        continue
-                    discovered.append(cand)
-                    kw_count += 1
-                    if kw_count >= max_per_keyword or len(discovered) >= max_total:
-                        break
-
-                logger.info(
-                    f"[INSTAGRAM DISCOVERY] Quét xong ngành '{clean_kw}': Thu thập {kw_count} ứng viên Instagram."
+                report_crawl_progress(
+                    f"Instagram: đang tìm '{kw}' trên {source}.",
+                    platform="INSTAGRAM", keyword=kw,
+                    stage="hashtag" if source == "hashtag" else "search_provider",
                 )
-                page.wait_for_timeout(1000)
-
-        except Exception as e:
-            errors.append(str(e))
-            logger.error(f"[INSTAGRAM DISCOVERY] Lỗi trong tiến trình tìm kiếm Instagram: {e}")
+                try:
+                    if source == "hashtag":
+                        candidates = _collect_instagram_hashtag_candidates(
+                            page, context, url, max_posts=min(budget - checks, 12))
+                    else:
+                        response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                        status = getattr(response, "status", 200)
+                        if isinstance(status, int) and status >= 400:
+                            raise InstagramDiscoveryError(f"{source} HTTP {status}")
+                        page.wait_for_timeout(1500)
+                        _ensure_index_available(page)
+                        candidates = _extract_candidates_from_search_html(page.content())
+                    accessible = True
+                    for cand in candidates:
+                        key = cand["username"].casefold()
+                        if key in seen_usernames:
+                            continue
+                        seen_usernames.add(key)
+                        if not evaluate_tier0_search_card(cand)[0]:
+                            continue
+                        if checks >= budget:
+                            break
+                        checks += 1
+                        cand["search_keyword"] = kw
+                        cand["requested_category"] = requested_category
+                        cand["source"] = "INSTAGRAM_HASHTAG" if source == "hashtag" else source.upper()
+                        report_crawl_progress(
+                            f"Instagram: đang xác minh @{cand['username']}.", platform="INSTAGRAM",
+                            keyword=kw, stage="profile_verification",
+                        )
+                        if not _verify_instagram_candidate(cand, f"{requested_category or ''}; {kw}"):
+                            if cand.get("_verified_snapshot"):
+                                report_discovery_rejection(build_discovery_rejection_result(
+                                    cand,
+                                    reason_codes=[
+                                        *((cand.get("creator_check") or {}).get("reason_codes") or []),
+                                        "TOPIC_NOT_MATCHED",
+                                    ],
+                                    summary_reason=f"Nội dung chưa đủ bằng chứng khớp chủ đề '{kw or requested_category or ''}'.",
+                                ))
+                            continue
+                        discovered.append(cand)
+                        counts[kw] = counts.get(kw, 0) + 1
+                        if counts[kw] >= max_per_keyword or len(discovered) >= max_total:
+                            break
+                    report_crawl_progress(
+                        f"Instagram: xong '{kw}' trên {source}, có {counts.get(kw, 0)} ứng viên đã xác minh.",
+                        platform="INSTAGRAM", keyword=kw, stage="search_complete",
+                    )
+                except TopicVerificationUnavailable:
+                    # AI không khả dụng: giữ ứng viên hiện tại cần duyệt thủ công, tiếp tục source tiếp theo
+                    try:
+                        _cand = cand  # noqa: F821  – defined in loop above when exception fires
+                        _cand["requires_manual_review"] = True
+                        if evaluate_tier0_search_card(_cand)[0] and _cand not in discovered:
+                            discovered.append(_cand)
+                            counts[kw] = counts.get(kw, 0) + 1
+                    except Exception:
+                        pass
+                    continue
+                except Exception as error:
+                    errors.append(f"{source}: {type(error).__name__}: {str(error)[:200]}")
+                    logger.warning("Instagram %s unavailable: %s", source, type(error).__name__)
+                    report_crawl_progress(
+                        f"Instagram: {source} không khả dụng, đang thử nguồn tiếp theo.",
+                        platform="INSTAGRAM", keyword=kw, stage="source_error",
+                    )
+        except InstagramDiscoveryError:
+            raise
+        except Exception as error:
+            errors.append(f"Browser: {type(error).__name__}")
+            logger.exception("Instagram discovery failed")
         finally:
             if browser is not None:
                 browser.close()
-
     if errors and not accessible and not discovered:
-        raise InstagramDiscoveryError("Instagram discovery unavailable: " + "; ".join(errors[:3]))
+        raise InstagramDiscoveryError("Instagram discovery unavailable: " + "; ".join(errors[:5]))
     return discovered

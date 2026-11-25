@@ -114,16 +114,16 @@ class CollectionReliabilityTest(unittest.TestCase):
                 "app.crawlers.discovery_crawler.search_new_facebook_candidates", return_value=[{"username": "creator", "platform": "FACEBOOK"}]):
             self.assertEqual(CategoryDiscoveryService().get_candidates_by_category("TECH", limit=1)[0]["platform"], "FACEBOOK")
 
-    def test_tiktok_blocked_search_uses_index_fallback(self):
+    def test_tiktok_blocked_native_sources_report_failure(self):
         from app.crawlers import tiktok_discovery as discovery
         from unittest.mock import MagicMock
         context = MagicMock()
         context.new_page.return_value.goto.side_effect = discovery.TikTokDiscoveryError("blocked")
-        with patch.object(discovery, "sync_playwright"), patch.object(discovery, "_init_discovery_context", return_value=(MagicMock(), context)), patch.object(
-                discovery, "_search_indexed_tiktok_candidates", return_value=[{"username": "verified"}]) as fallback:
-            result = discovery.search_new_tiktok_candidates(["review"], max_total=1)
-            self.assertEqual(result[0]["username"], "verified")
-            fallback.assert_called_once()
+        with patch.object(discovery, "sync_playwright"), patch.object(discovery, "_init_discovery_context", return_value=(MagicMock(), context)):
+            with self.assertRaises(discovery.TikTokDiscoveryError):
+                discovery.search_new_tiktok_candidates(["review"], max_total=1)
+            urls = [call.args[0] for call in context.new_page.return_value.goto.call_args_list]
+            self.assertEqual(urls, ["https://www.tiktok.com/", "https://www.tiktok.com/explore"])
 
     def test_instagram_rejects_unverified_index_result(self):
         from app.crawlers import instagram_discovery as discovery

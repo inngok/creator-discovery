@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch, mock_open
 
 from app.services.discovery_verification import verify_discovery_profile, matches_requested_topic
+from app.services.live_crawl_service import _apply_verified_topic_auto_accept
 from app.core.crawl_progress import reset_crawl_progress_callback, set_crawl_progress_callback
 from app.crawlers.tiktok_discovery import _run_profile_check, _verify_tiktok_candidate_followers
 from app.ai.rules.rule_config import Decision
@@ -115,11 +116,55 @@ class DiscoveryVerificationTest(unittest.TestCase):
             answer[field] = value
             self.assertFalse(self.topic(answer))
 
-    def test_ambiguous_creator_with_grounded_topic_evidence_can_be_reviewed(self):
+    def test_ambiguous_unknown_creator_cannot_be_auto_accepted_by_topic_match(self):
         answer = self.answer()
         answer.update(creatorType="UNKNOWN", confidence=0.7)
-        self.assertTrue(self.topic(answer, requires_manual_review=True))
+        self.assertFalse(self.topic(answer, requires_manual_review=True))
         self.assertFalse(self.topic(answer))
+
+    def test_rule_review_candidate_is_auto_accepted_after_grounded_topic_check(self):
+        answer = self.answer()
+        answer.update(creatorType="KOL", confidence=0.9)
+        candidate = {
+            "topic_evidence_posts": [
+                {"postId": "1", "caption": "Travel mountain hiking guide"},
+                {"postId": "2", "caption": "Travel resort review and costs"},
+            ],
+            "requires_manual_review": True,
+        }
+        fake = SimpleNamespace(get_llm_enrichment=lambda _: answer)
+        with patch.dict("sys.modules", {"app.ai.analyzer": fake}):
+            self.assertTrue(matches_requested_topic(candidate, "travel"))
+
+        self.assertEqual(candidate["topic_check"]["creator_type"], "KOL")
+
+    def test_grounded_topic_override_resolves_review_but_never_hard_reject(self):
+        result = RuleDecisionResult(
+            decision=Decision.NEEDS_MANAGER_REVIEW,
+            primary_type="UNKNOWN",
+            reason_codes=["BR05_DUAL_KOC_KOL_AMBIGUITY"],
+        )
+        snapshot = {
+            "posts": [
+                {"platformPostId": "1", "caption": "Travel mountain hiking guide"},
+                {"platformPostId": "2", "caption": "Travel resort review and costs"},
+            ],
+            "topic_auto_accept": {
+                "creator_type": "KOL",
+                "confidence": 0.9,
+                "evidence": [
+                    {"postId": "1", "quote": "Travel mountain hiking guide"},
+                    {"postId": "2", "quote": "Travel resort review and costs"},
+                ],
+            },
+        }
+        accepted = _apply_verified_topic_auto_accept(result, snapshot)
+        self.assertEqual(accepted.decision, Decision.AUTO_ACCEPT_KOL)
+        self.assertEqual(accepted.primary_type, "KOL")
+        self.assertIn("DISCOVERY_TOPIC_AUTO_ACCEPT", accepted.reason_codes)
+
+        rejected = result.model_copy(update={"decision": Decision.AUTO_REJECT})
+        self.assertEqual(_apply_verified_topic_auto_accept(rejected, snapshot), rejected)
 
     def test_search_card_alone_is_not_topic_evidence(self):
         fake = SimpleNamespace(get_llm_enrichment=lambda _: self.answer())
@@ -166,3 +211,70 @@ class DiscoveryVerificationTest(unittest.TestCase):
         fetch.assert_not_called()
         self.assertEqual(result["recent_posts"], posts)
         self.assertEqual(result["decision"], "AUTO_ACCEPT_KOC")
+
+    def test_topic_verified_candidate_is_auto_accepted_after_live_rule_review(self):
+        from app.services.live_crawl_service import crawl_single_koc_live
+        profile, posts, _ = self.profile([
+            "Travel mountain hiking guide with trail details",
+            "Travel resort review and complete costs",
+            "My travel video",
+            "Travel planning notes",
+            "Travel trip recap",
+        ])
+        profile.update(following=10, heart_count=1000, video_count=20, avatar_url="",
+                       is_verified=False, latency_ms=10)
+        review_result = RuleDecisionResult(
+            decision=Decision.NEEDS_MANAGER_REVIEW,
+            primary_type="UNKNOWN",
+            reason_codes=["BR05_DUAL_KOC_KOL_AMBIGUITY"],
+        )
+        snapshot = {
+            "platform": "TIKTOK",
+            "username": "creator",
+            "profile": profile,
+            "posts": posts,
+            "verified_at": time.time(),
+            "topic_auto_accept": {
+                "creator_type": "KOL",
+                "confidence": 0.9,
+                "evidence": [
+                    {"postId": "0", "quote": "Travel mountain hiking guide"},
+                    {"postId": "1", "quote": "Travel resort review and complete costs"},
+                ],
+            },
+        }
+        from app.core.models import AIEnrichment
+        fake_ai = SimpleNamespace(
+            get_llm_enrichment=lambda _: {},
+            process_ai_enrichment=lambda *_: AIEnrichment(creatorType="KOL"),
+        )
+        with ExitStack() as stack:
+            staging = stack.enter_context(patch("app.services.live_crawl_service.staging_repo"))
+            staging.get_candidate.return_value = None
+            stack.enter_context(patch("app.services.live_crawl_service.append_to_crawled_results"))
+            stack.enter_context(patch("app.services.live_crawl_service.metrics_tracker"))
+            stack.enter_context(patch("app.services.live_sync_service.staging_repo", staging))
+            stack.enter_context(patch("app.services.live_sync_service.append_to_crawled_results"))
+            stack.enter_context(patch(
+                "app.services.live_crawl_service.RuleEngine.evaluate",
+                return_value=review_result,
+            ))
+            stack.enter_context(patch.dict("sys.modules", {"app.ai.analyzer": fake_ai}))
+            stack.enter_context(patch(
+                "app.services.ai_candidate_review.review_candidate",
+                return_value=review_result,
+            ))
+            stack.enter_context(patch(
+                "app.services.live_sync_service.JavaMapper.from_ingest_payload",
+                return_value={"dataConfidence": 0.9},
+            ))
+            send_to_database = stack.enter_context(patch(
+                "app.services.live_sync_service.java_client.send_creator_data",
+                return_value=True,
+            ))
+            stack.enter_context(patch("builtins.open", mock_open()))
+            result = crawl_single_koc_live("creator", "TIKTOK", verified_snapshot=snapshot)
+
+        self.assertEqual(result["decision"], Decision.AUTO_ACCEPT_KOL.value)
+        self.assertTrue(result["database_synced"])
+        send_to_database.assert_called_once()

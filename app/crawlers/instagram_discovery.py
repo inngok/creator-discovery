@@ -8,6 +8,7 @@ from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
 from app.core.crawl_progress import report_crawl_progress
+from app.services.discovery_verification import TopicVerificationUnavailable
 from app.crawlers.search_extractor import (
     evaluate_tier0_search_card,
     parse_follower_string,
@@ -321,6 +322,8 @@ def search_new_instagram_candidates(
                         f"Instagram: xong '{kw}' trên {source}, có {counts.get(kw, 0)} ứng viên đã xác minh.",
                         platform="INSTAGRAM", keyword=kw, stage="search_complete",
                     )
+                except TopicVerificationUnavailable as error:
+                    raise InstagramDiscoveryError(str(error)) from error
                 except Exception as error:
                     errors.append(f"{source}: {type(error).__name__}: {str(error)[:200]}")
                     logger.warning("Instagram %s unavailable: %s", source, type(error).__name__)
@@ -328,6 +331,8 @@ def search_new_instagram_candidates(
                         f"Instagram: {source} không khả dụng, đang thử nguồn tiếp theo.",
                         platform="INSTAGRAM", keyword=kw, stage="source_error",
                     )
+        except InstagramDiscoveryError:
+            raise
         except Exception as error:
             errors.append(f"Browser: {type(error).__name__}")
             logger.exception("Instagram discovery failed")

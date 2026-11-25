@@ -19,7 +19,7 @@ from playwright.sync_api import (
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
-from app.core.post_dates import normalize_post_date
+from app.core.post_dates import normalize_post_date, post_evidence_order
 from app.core.models import CreatorInfo, IngestPayload, Platform, Post
 
 logger = setup_logger("tiktok_crawler")
@@ -33,6 +33,7 @@ def _init_playwright_context(p) -> tuple[BrowserContext, None]:
 def _setup_network_interception(page: Page, username: str) -> list[Post]:
     recent_posts: list[Post] = []
     seen_post_ids: set[str] = set()
+    max_captured_posts = 60
 
     def handle_response(response):
         if (
@@ -46,13 +47,18 @@ def _setup_network_interception(page: Page, username: str) -> list[Post]:
                     return
                 body = json.loads(text)
                 itemList = body.get("itemList", [])
+                if not isinstance(itemList, list):
+                    return
                 for v in itemList:
-                    if len(recent_posts) >= 12:
+                    if not isinstance(v, dict):
+                        continue
+                    if len(recent_posts) >= max_captured_posts:
                         break
                     post_id = str(v.get("id", ""))
                     author = v.get("author") or {}
                     author_name = author.get("uniqueId", "") if isinstance(author, dict) else ""
-                    if author_name and author_name.casefold() != username.lstrip("@").casefold():
+                    if (isinstance(author_name, str) and author_name
+                            and author_name.casefold() != username.lstrip("@").casefold()):
                         continue
                     if not post_id or post_id in seen_post_ids:
                         continue
@@ -63,6 +69,8 @@ def _setup_network_interception(page: Page, username: str) -> list[Post]:
                     posted_at = normalize_post_date(create_time)
 
                     stats = v.get("stats", {})
+                    if not isinstance(stats, dict):
+                        stats = {}
                     recent_posts.append(
                         Post(
                             platformPostId=post_id,
@@ -202,19 +210,19 @@ def _crawl_tiktok_profile_sync(username: str) -> IngestPayload | None:
                 )
 
             # Scroll để trigger fetch list video API
-            for _ in range(5):
-                if len(recent_posts) >= 12:
+            for _ in range(8):
+                if len(recent_posts) >= 60:
                     break
                 scroll_amount = random.randint(1000, 1800)
                 page.evaluate(f"window.scrollBy(0, {scroll_amount});")
                 page.wait_for_timeout(1000)
 
             # Dự phòng bóc trực tiếp từ DOM nếu network interception chưa kịp lấy
-            if len(recent_posts) < 12:
+            if len(recent_posts) < 60:
                 content = page.content()
                 soup = BeautifulSoup(content, "html.parser")
                 for a in soup.select("a[href*='/video/']"):
-                    if len(recent_posts) >= 12:
+                    if len(recent_posts) >= 60:
                         break
                     href = a.get("href", "")
                     if not re.search(r"/@" + re.escape(username) + r"/video/", href, re.IGNORECASE):
@@ -244,6 +252,8 @@ def _crawl_tiktok_profile_sync(username: str) -> IngestPayload | None:
             context.browser.close()
 
         time.sleep(random.uniform(10.0, 30.0))
+
+    recent_posts = sorted(recent_posts, key=post_evidence_order, reverse=True)[:12]
 
     if not recent_posts:
         logger.info(

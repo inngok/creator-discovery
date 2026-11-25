@@ -18,8 +18,39 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
         with self.assertRaises(discovery.TikTokDiscoveryError):
             discovery._ensure_search_available(page, SimpleNamespace(status=200))
 
+    def test_tiktok_discovery_keeps_uncertain_leads_for_manual_review(self):
+        candidate = {"username": "creator"}
+        with patch(
+            "app.services.discovery_verification.verify_discovery_profile",
+            return_value=True,
+        ) as verify:
+            result = discovery._verify_tiktok_candidate_followers(candidate)
+
+        self.assertTrue(result)
+        verify.assert_called_once_with(candidate, allow_review_candidate=True)
+
+    def test_topic_verified_review_lead_carries_auto_accept_evidence(self):
+        candidate = {
+            "requires_manual_review": True,
+            "creator_check": {"decision": "NEEDS_MANAGER_REVIEW", "reason_codes": []},
+            "topic_check": {
+                "creator_type": "KOC",
+                "confidence": 0.9,
+                "evidence": [{"postId": "1", "quote": "A verified creator quote"}],
+            },
+            "_verified_snapshot": {},
+        }
+
+        discovery._mark_topic_auto_accept(candidate)
+
+        self.assertFalse(candidate["requires_manual_review"])
+        self.assertEqual(candidate["creator_check"]["decision"], "AUTO_ACCEPT_KOC")
+        self.assertEqual(
+            candidate["_verified_snapshot"]["topic_auto_accept"]["creator_type"], "KOC"
+        )
+
     def search(self, pages, topic_match=lambda c, k: True, limit=1,
-               keywords=None):
+               keywords=None, fallback_side_effect=None):
         page = MagicMock()
         page.content.side_effect = pages
         context = MagicMock()
@@ -32,6 +63,12 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
                                              side_effect=lambda page, keyword: page.goto(
                                                  "https://www.tiktok.com/explore" if keyword is None else "UI_SEARCH:" + keyword)))
             stack.enter_context(patch("app.services.crawled_result_service.get_crawled_tiktok_identifiers", return_value=set()))
+            stack.enter_context(patch.object(
+                discovery,
+                "_search_indexed_tiktok_candidates",
+                side_effect=fallback_side_effect,
+                **({"return_value": []} if fallback_side_effect is None else {}),
+            ))
             stack.enter_context(patch.object(discovery, "_trending_matches_topic", side_effect=topic_match))
             stack.enter_context(patch.object(discovery, "_run_profile_check", return_value=True))
             result = discovery.search_new_tiktok_candidates(
@@ -54,13 +91,13 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
         search = page.locator.return_value.first
         search.fill.assert_called_once_with("review tech", timeout=10000)
         search.press.assert_called_once_with("Enter", timeout=10000)
-        page.wait_for_url.assert_called_once_with("**/search**", wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_url.assert_called_once_with("**/search**", wait_until="domcontentloaded", timeout=5000)
 
     def test_collapsed_search_is_opened_before_typing(self):
         page = MagicMock()
         page.locator.return_value.first.is_visible.return_value = False
         discovery._open_tiktok_discovery_page(page, "review tech")
-        page.locator.return_value.click.assert_called_once_with(timeout=10000)
+        page.locator.return_value.first.click.assert_called_once_with(timeout=10000)
         page.locator.return_value.first.fill.assert_called_once_with("review tech", timeout=10000)
 
     def test_trending_opens_tiktok_explore(self):
@@ -128,6 +165,86 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
     def test_empty_native_sources_return_no_candidates(self):
         results, _ = self.search([""] * 6)
         self.assertEqual(results, [])
+
+    def test_empty_native_sources_try_indexed_search_fallback(self):
+        page = MagicMock()
+        page.content.side_effect = [""] * 6
+        context = MagicMock()
+        context.new_page.return_value = page
+        fallback_candidate = {"username": "techcreator", "platform": "TIKTOK"}
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(discovery, "sync_playwright"))
+            stack.enter_context(patch.object(
+                discovery, "_init_discovery_context", return_value=(MagicMock(), context)
+            ))
+            stack.enter_context(patch.object(discovery, "Stealth"))
+            stack.enter_context(patch.object(discovery, "_open_tiktok_discovery_page"))
+            stack.enter_context(patch(
+                "app.services.crawled_result_service.get_crawled_tiktok_identifiers",
+                return_value=set(),
+            ))
+            fallback = stack.enter_context(patch.object(
+                discovery, "_search_indexed_tiktok_candidates", return_value=[fallback_candidate]
+            ))
+            results = discovery.search_new_tiktok_candidates(
+                ["review công nghệ"], requested_category="TECH"
+            )
+
+        self.assertEqual(results, [fallback_candidate])
+        fallback.assert_called_once_with(["review công nghệ"], 10, 30, "TECH")
+
+    def test_indexed_search_extracts_and_verifies_public_tiktok_profile(self):
+        html = '<div><a href="https://www.tiktok.com/@techcreator">Tech creator</a></div>'
+        playwright = MagicMock()
+        browser = MagicMock()
+        page = MagicMock()
+        playwright.chromium.launch.return_value = browser
+        browser.new_page.return_value = page
+        page.goto.return_value = None
+        page.content.return_value = html
+
+        with ExitStack() as stack:
+            sync_playwright = stack.enter_context(patch.object(discovery, "sync_playwright"))
+            sync_playwright.return_value.__enter__.return_value = playwright
+            stack.enter_context(patch(
+                "app.services.crawled_result_service.get_crawled_tiktok_identifiers",
+                return_value=set(),
+            ))
+            stack.enter_context(patch.object(discovery, "_run_profile_check", return_value=True))
+            stack.enter_context(patch.object(discovery, "_trending_matches_topic", return_value=True))
+            results = discovery._search_indexed_tiktok_candidates(
+                ["review công nghệ"], 1, 1, "TECH"
+            )
+
+        self.assertEqual(results[0]["username"], "techcreator")
+        self.assertEqual(results[0]["source"], "SEARCH_INDEX_LIVE_VERIFIED")
+        self.assertEqual(page.goto.call_args_list[0].args[0],
+                         "https://www.tiktok.com/tag/reviewcongnghe")
+
+    def test_indexed_search_failure_is_not_reported_as_no_results(self):
+        playwright = MagicMock()
+        browser = MagicMock()
+        page = MagicMock()
+        playwright.chromium.launch.return_value = browser
+        browser.new_page.return_value = page
+        page.goto.side_effect = RuntimeError("network unavailable")
+
+        with ExitStack() as stack:
+            sync_playwright = stack.enter_context(patch.object(discovery, "sync_playwright"))
+            sync_playwright.return_value.__enter__.return_value = playwright
+            stack.enter_context(patch(
+                "app.services.crawled_result_service.get_crawled_tiktok_identifiers",
+                return_value=set(),
+            ))
+            with self.assertRaisesRegex(discovery.TikTokDiscoveryError, "providers are unavailable"):
+                discovery._search_indexed_tiktok_candidates(["tech"], 1, 1, "TECH")
+
+    def test_topic_verification_unavailable_is_not_reported_as_no_results(self):
+        with self.assertRaisesRegex(discovery.TikTokDiscoveryError, "AI unavailable"):
+            self.search(
+                [""] * 6,
+                fallback_side_effect=discovery.TopicVerificationUnavailable("AI unavailable"),
+            )
 
     def test_filtered_native_sources_return_no_candidates(self):
         html = self.card("unrelated", "Unrelated video about a different topic")

@@ -10,7 +10,11 @@ from app.core.logger import setup_logger
 from app.core.crawl_progress import report_crawl_progress
 from app.crawlers.search_extractor import evaluate_tier0_search_card
 from app.crawlers.tiktok_discovery import _run_profile_check
-from app.services.discovery_verification import verify_discovery_profile, matches_requested_topic
+from app.services.discovery_verification import (
+    TopicVerificationUnavailable,
+    matches_requested_topic,
+    verify_discovery_profile,
+)
 
 logger = setup_logger("facebook_discovery")
 
@@ -175,6 +179,8 @@ def search_new_facebook_candidates(
                     )
                     page.wait_for_timeout(2000)
 
+                except TopicVerificationUnavailable as error:
+                    raise FacebookDiscoveryError(str(error)) from error
                 except FacebookDiscoveryError as access_error:
                     access_errors.append(access_error)
                     report_crawl_progress(

@@ -1,4 +1,5 @@
 import json
+import time
 import unittest
 from datetime import datetime, UTC
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from app.crawlers.tiktok_crawler import _setup_network_interception
 from app.crawlers import preflight_fetcher
+from app.crawlers.preflight_fetcher import normalize_tiktok_item_list
 from app.services.ai_candidate_review import review_candidate
 from app.ai.rules.rule_config import Decision, ProcessingStatus
 from app.core.deduplicator import should_enqueue_preflight
@@ -14,6 +16,51 @@ from app.ai.rules.signal_extractor import ProfileMetadata, PostPreview
 
 
 class TikTokPostCollectionTest(unittest.TestCase):
+    def test_ssr_and_api_posts_are_deduplicated_and_sorted_newest_first(self):
+        items = [
+            {"id": "pinned-old", "createTime": "2024-01-01T00:00:00Z",
+             "isTop": True, "author": {"uniqueId": "traveler"}},
+            {"id": "recent", "createTime": "2026-11-18T00:00:00Z",
+             "desc": "Recent review", "stats": {"playCount": 0},
+             "author": {"uniqueId": "traveler"}},
+            {"id": "newest", "createTime": "2026-11-24T00:00:00Z",
+             "desc": "Newest post", "author": {"uniqueId": "traveler"}},
+            {"id": "recent", "stats": {"playCount": 4200}},
+            {"id": "unknown-date", "desc": "Undated DOM fallback"},
+            {"id": "foreign", "createTime": "2026-11-25T00:00:00Z",
+             "author": {"uniqueId": "someone_else"}},
+        ]
+
+        normalized = normalize_tiktok_item_list(items, "traveler")
+
+        self.assertEqual(
+            [item["id"] for item in normalized],
+            ["newest", "recent", "pinned-old", "unknown-date"],
+        )
+        self.assertEqual(normalized[1]["stats"]["playCount"], 4200)
+
+    def test_live_fetcher_uses_newest_owned_ssr_posts(self):
+        from app.services.live_fetcher_service import fetch_raw_creator_profile
+
+        data = {"__DEFAULT_SCOPE__": {"webapp.user-detail": {
+            "userInfo": {
+                "user": {"id": "123", "uniqueId": "traveler", "nickname": "Traveler"},
+                "stats": {"followerCount": 15000},
+            },
+            "itemList": [
+                {"id": "old", "createTime": "2024-01-01T00:00:00Z", "desc": "Pinned old"},
+                {"id": "new", "createTime": "2026-11-24T00:00:00Z", "desc": "Newest"},
+                {"id": "foreign", "createTime": "2026-11-25T00:00:00Z",
+                 "author": {"uniqueId": "another_user"}},
+            ],
+        }}}
+        with patch("app.services.live_fetcher_service.fetch_tiktok_ssr_raw_data",
+                   return_value=data):
+            _, posts, error = fetch_raw_creator_profile("traveler", "TIKTOK", time.time())
+
+        self.assertIsNone(error)
+        self.assertEqual([post["platformPostId"] for post in posts], ["new", "old"])
+
     def test_old_extraction_rejection_can_be_rechecked_without_cooldown(self):
         record = SimpleNamespace(
             decision=Decision.AUTO_REJECT, processing_status=ProcessingStatus.FAILED,

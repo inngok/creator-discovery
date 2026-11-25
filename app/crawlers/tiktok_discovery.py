@@ -1,4 +1,6 @@
 import re
+import unicodedata
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from bs4 import BeautifulSoup
@@ -7,6 +9,7 @@ from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
 from app.core.crawl_progress import report_crawl_progress
+from app.services.discovery_verification import TopicVerificationUnavailable
 from app.crawlers.search_extractor import (
     evaluate_tier0_search_card,
     extract_search_card_candidates,
@@ -17,6 +20,14 @@ logger = setup_logger("tiktok_discovery")
 
 class TikTokDiscoveryError(RuntimeError):
     pass
+
+
+def _keyword_to_tag(keyword: str) -> str:
+    clean = keyword.strip().lstrip("#").strip()
+    normalized = unicodedata.normalize("NFKD", clean)
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    ascii_text = ascii_text.replace("đ", "d").replace("Đ", "D")
+    return re.sub(r"[^a-zA-Z0-9_]", "", ascii_text).lower()
 
 
 def _run_profile_check(check, *args):
@@ -81,6 +92,133 @@ def _verify_tiktok_candidate_followers(candidate: dict) -> bool:
     return verify_discovery_profile(candidate, allow_review_candidate=True)
 
 
+def _mark_topic_auto_accept(candidate: dict) -> None:
+    if not candidate.get("requires_manual_review"):
+        return
+    topic_check = candidate.get("topic_check", {})
+    creator_type = topic_check.get("creator_type")
+    if creator_type not in {"KOC", "KOL"}:
+        return
+
+    candidate["requires_manual_review"] = False
+    creator_check = candidate.get("creator_check")
+    if isinstance(creator_check, dict):
+        creator_check.update(
+            decision=f"AUTO_ACCEPT_{creator_type}",
+            primary_type=creator_type,
+        )
+    snapshot = candidate.get("_verified_snapshot")
+    if isinstance(snapshot, dict):
+        snapshot["topic_auto_accept"] = {
+            "creator_type": creator_type,
+            "confidence": topic_check.get("confidence"),
+            "evidence": topic_check.get("evidence"),
+        }
+
+
+def _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requested_category):
+    """Use public search indexes as a fallback when TikTok search returns no leads."""
+    from app.services.crawled_result_service import get_crawled_tiktok_identifiers
+
+    found = []
+    seen = get_crawled_tiktok_identifiers()
+    checked = 0
+    source_available = False
+    budget = min(max(max_total * 3, len(keywords) * 3), 30)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            for keyword in keywords:
+                count = 0
+                tag = _keyword_to_tag(keyword)
+                query = urllib.parse.quote(f"site:tiktok.com/@ {keyword}")
+                urls = ([f"https://www.tiktok.com/tag/{tag}"] if tag else [])
+                urls.extend((
+                    f"https://www.google.com/search?q={query}&num=20",
+                    f"https://html.duckduckgo.com/html/?q={query}",
+                    f"https://www.bing.com/search?q={query}&count=20",
+                ))
+                for url in urls:
+                    source = urllib.parse.urlsplit(url).netloc or "hashtag"
+                    report_crawl_progress(
+                        f"TikTok: đang tìm trên {source}.",
+                        platform="TIKTOK",
+                        keyword=keyword,
+                        stage="indexed_search",
+                    )
+                    try:
+                        response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                        status = getattr(response, "status", None)
+                        if isinstance(status, int) and status >= 400:
+                            continue
+                        source_available = True
+                        soup = BeautifulSoup(page.content(), "html.parser")
+                        for anchor in soup.select("a[href]"):
+                            href = urllib.parse.unquote(anchor.get("href", ""))
+                            match = re.search(
+                                r"https?://(?:www\.)?tiktok\.com/@([\w.]+)(?:[/?&#]|$)", href
+                            )
+                            if not match:
+                                continue
+                            username = match.group(1)
+                            key = username.casefold()
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            if checked >= budget:
+                                return found
+                            card = anchor.parent
+                            card_text = card.get_text(" ", strip=True) if card else ""
+                            candidate = {
+                                "username": username,
+                                "platform": "TIKTOK",
+                                "profile_url": f"https://www.tiktok.com/@{username}",
+                                "search_keyword": keyword,
+                                "requested_category": requested_category,
+                                "bio_snippet": card_text,
+                                "topic_evidence_text": card_text,
+                                "source": "SEARCH_INDEX_LIVE_VERIFIED",
+                            }
+                            checked += 1
+                            if not _run_profile_check(_verify_tiktok_candidate_followers, candidate):
+                                continue
+                            if not _trending_matches_topic(
+                                candidate, f"{requested_category or ''}; {keyword}"
+                            ):
+                                report_crawl_progress(
+                                    f"TikTok: @{username} chưa đủ bằng chứng khớp chủ đề.",
+                                    platform="TIKTOK",
+                                    keyword=keyword,
+                                    stage="topic_rejected",
+                                )
+                                continue
+                            _mark_topic_auto_accept(candidate)
+                            if not evaluate_tier0_search_card(candidate)[0]:
+                                continue
+                            found.append(candidate)
+                            count += 1
+                            if len(found) >= max_total or count >= max_per_keyword:
+                                break
+                    except TopicVerificationUnavailable:
+                        raise
+                    except Exception as error:
+                        logger.warning(
+                            "TikTok indexed search failed for %s: %s",
+                            source,
+                            type(error).__name__,
+                        )
+                    if len(found) >= max_total or count >= max_per_keyword:
+                        break
+                if len(found) >= max_total:
+                    break
+        finally:
+            browser.close()
+    if not source_available:
+        raise TikTokDiscoveryError("All indexed TikTok search providers are unavailable")
+    return found
+
+
 def _init_discovery_context(p):
     from app.crawlers.tiktok_crawler import _init_playwright_context
     context, _ = _init_playwright_context(p)
@@ -117,13 +255,20 @@ def _open_tiktok_discovery_page(page, keyword: str | None):
         return
     page.goto("https://www.tiktok.com/", wait_until="domcontentloaded", timeout=20000)
     search = page.locator('input[data-e2e="search-user-input"]:visible, input[type="search"]:visible').first
+    page.locator('input[data-e2e="search-user-input"]:visible, input[type="search"]:visible, '
+                 '[data-e2e="nav-search"]:visible').first.wait_for(state="visible", timeout=15000)
     # Desktop TikTok can collapse the search form behind the navigation button.
     if not search.is_visible():
-        page.locator('[data-e2e="nav-search"]').click(timeout=10000)
+        page.locator('[data-e2e="nav-search"]:visible').first.click(timeout=10000)
     search.wait_for(state="visible", timeout=15000)
     search.fill(keyword.strip(), timeout=10000)
     search.press("Enter", timeout=10000)
-    page.wait_for_url("**/search**", wait_until="domcontentloaded", timeout=20000)
+    try:
+        page.wait_for_url("**/search**", wait_until="domcontentloaded", timeout=5000)
+    except PlaywrightTimeoutError:
+        # Enter may select an autocomplete suggestion without submitting the form.
+        page.locator('[data-e2e="search-box-button"]:visible').first.click(timeout=10000)
+        page.wait_for_url("**/search**", wait_until="domcontentloaded", timeout=20000)
     page.wait_for_timeout(2500)
     try:
         page.locator('a[href*="/video/"], [data-e2e="search-user-card"], '
@@ -223,6 +368,7 @@ def search_new_tiktok_candidates(
                                         stage="topic_rejected",
                                     )
                                     continue
+                                _mark_topic_auto_accept(cand)
                                 if not evaluate_tier0_search_card(cand)[0]:
                                     continue
                                 cand["platform"] = "TIKTOK"
@@ -252,6 +398,8 @@ def search_new_tiktok_candidates(
                         if kw_count:
                             break
 
+                    except TopicVerificationUnavailable:
+                        raise
                     except Exception as kw_err:
                         search_errors.append(f"{kw}: {type(kw_err).__name__}: {str(kw_err)[:250]}")
                         logger.warning(f"[DISCOVERY] Lỗi khi quét từ khóa '{kw}': {kw_err}")
@@ -264,9 +412,27 @@ def search_new_tiktok_candidates(
                         continue
 
             browser.close()
+        except TopicVerificationUnavailable as error:
+            raise TikTokDiscoveryError(str(error)) from error
         except Exception as e:
             search_errors.append(f"Playwright: {type(e).__name__}")
             logger.error(f"[DISCOVERY] Lỗi khởi tạo Playwright Discovery: {e}")
+
+    if not discovered:
+        report_crawl_progress(
+            "TikTok: đang thử Google, DuckDuckGo và Bing làm nguồn tìm kiếm dự phòng.",
+            platform="TIKTOK",
+            stage="indexed_fallback",
+        )
+        try:
+            discovered = _search_indexed_tiktok_candidates(
+                keywords, max_per_keyword, max_total, requested_category
+            )
+        except TopicVerificationUnavailable as error:
+            raise TikTokDiscoveryError(str(error)) from error
+        except Exception as error:
+            search_errors.append(f"Indexed search: {type(error).__name__}: {str(error)[:250]}")
+            logger.warning("TikTok indexed fallback unavailable: %s", type(error).__name__)
 
     if not discovered and search_errors and not search_source_available:
         raise TikTokDiscoveryError("TikTok search and trending discovery failed: " + "; ".join(search_errors[:5]))

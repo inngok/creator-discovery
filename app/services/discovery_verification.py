@@ -13,6 +13,10 @@ from app.core.logger import setup_logger
 logger = setup_logger("discovery_verification")
 
 
+class TopicVerificationUnavailable(RuntimeError):
+    """The topic service failed; this is not evidence of an unrelated creator."""
+
+
 def verify_discovery_profile(candidate: dict, allow_review_candidate: bool = False) -> bool:
     from app.services.live_fetcher_service import fetch_raw_creator_profile
 
@@ -91,8 +95,7 @@ def verify_discovery_profile(candidate: dict, allow_review_candidate: bool = Fal
         )
     )
     if not has_minimum_evidence or (
-        verdict.decision not in {Decision.AUTO_ACCEPT_KOC, Decision.AUTO_ACCEPT_KOL,
-                                 Decision.NEEDS_MANAGER_REVIEW}
+        verdict.decision not in {Decision.AUTO_ACCEPT_KOC, Decision.AUTO_ACCEPT_KOL}
         and not reviewable_tiktok_lead
     ):
         logger.info("[DISCOVERY DROP] %s @%s: %s posts=%s", platform, username,
@@ -115,7 +118,7 @@ def verify_discovery_profile(candidate: dict, allow_review_candidate: bool = Fal
     if reviewable_tiktok_lead:
         candidate["requires_manual_review"] = True
         report_crawl_progress(
-            f"TikTok: giữ @{username} để AI/chuyên viên thẩm định tiếp.",
+            f"TikTok: giữ @{username} để AI xác minh chủ đề.",
             platform=platform,
             keyword=candidate.get("search_keyword"),
             stage="review_candidate",
@@ -146,14 +149,16 @@ def matches_requested_topic(candidate: dict, topic: str) -> bool:
                       "posts": posts}, ensure_ascii=False)
     )
     if not isinstance(answer, dict):
-        return False
+        candidate["topic_check"] = {"status": "UNAVAILABLE"}
+        report_crawl_progress(
+            "Dịch vụ AI chưa trả được kết quả xác minh chủ đề; chưa thể kết luận hồ sơ không phù hợp.",
+            platform=candidate.get("platform"), keyword=candidate.get("search_keyword"), stage="topic_unavailable",
+        )
+        raise TopicVerificationUnavailable("AI xác minh chủ đề không khả dụng; thử lại sau.")
     confidence = answer.get("confidence")
-    review_candidate = candidate.get("requires_manual_review") is True
-    allowed_creator_types = {"KOC", "KOL", "UNKNOWN"} if review_candidate else {"KOC", "KOL"}
-    minimum_confidence = 0.65 if review_candidate else 0.85
-    if (answer.get("matches") is not True or answer.get("creatorType") not in allowed_creator_types
+    if (answer.get("matches") is not True or answer.get("creatorType") not in {"KOC", "KOL"}
             or type(confidence) not in {int, float} or not math.isfinite(confidence)
-            or not minimum_confidence <= confidence <= 1):
+            or not 0.85 <= confidence <= 1):
         return False
     evidence = answer.get("topicEvidence")
     if not isinstance(evidence, list):
@@ -169,5 +174,9 @@ def matches_requested_topic(candidate: dict, topic: str) -> bool:
             proven.add(post_id)
     if len({sources[post_id].casefold() for post_id in proven}) < 2:
         return False
-    candidate["topic_check"] = {"confidence": confidence, "evidence": evidence}
+    candidate["topic_check"] = {
+        "creator_type": answer["creatorType"],
+        "confidence": confidence,
+        "evidence": evidence,
+    }
     return True

@@ -5,7 +5,10 @@ from typing import Any
 from app.core.logger import setup_logger
 from app.core.post_dates import normalize_post_date
 from app.core.metrics_tracker import metrics_tracker
-from app.crawlers.preflight_fetcher import fetch_tiktok_ssr_raw_data
+from app.crawlers.preflight_fetcher import (
+    fetch_tiktok_ssr_raw_data,
+    normalize_tiktok_item_list,
+)
 
 logger = setup_logger("live_fetcher_service")
 
@@ -217,6 +220,7 @@ def fetch_raw_creator_profile(
         item_list = ssr_data.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("itemList", [])
         if not item_list:
             item_list = ssr_data.get("itemList", [])
+        item_list = normalize_tiktok_item_list(item_list, unique_id)[:12]
 
         for item in item_list[:12]:
             pid = str(item.get("id", ""))

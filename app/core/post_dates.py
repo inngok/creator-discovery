@@ -27,10 +27,6 @@ def normalize_post_date(value: object, *, now: datetime | None = None) -> str | 
 
 
 def post_evidence_order(post) -> tuple[bool, float]:
-    """Keep unknown evidence, then newest first, before Java's three-post snapshot cap.
-
-    An undated post must not disappear behind three old pinned posts and cause a
-    false inactivity warning.
-    """
+    """Order dated posts newest first; retain undated evidence after them."""
     date = normalize_post_date(post.postedAt)
-    return date is None, datetime.fromisoformat(date.replace("Z", "+00:00")).timestamp() if date else 0
+    return date is not None, datetime.fromisoformat(date.replace("Z", "+00:00")).timestamp() if date else 0

@@ -179,8 +179,19 @@ def search_new_facebook_candidates(
                     )
                     page.wait_for_timeout(2000)
 
-                except TopicVerificationUnavailable as error:
-                    raise FacebookDiscoveryError(str(error)) from error
+                except TopicVerificationUnavailable:
+                    # AI không khả dụng: giữ ứng viên hiện tại cần duyệt thủ công, tiếp tục source tiếp theo
+                    # (cand vẫn ở local scope — thêm vào discovered nếu pass tier0)
+                    try:
+                        _cand = cand  # noqa: F821  – defined in loop above when exception fires
+                        _cand["requires_manual_review"] = True
+                        if evaluate_tier0_search_card(_cand)[0] and _cand not in discovered:
+                            discovered.append(_cand)
+                            kw_count += 1
+                            keyword_counts[kw] = kw_count
+                    except Exception:
+                        pass
+                    continue
                 except FacebookDiscoveryError as access_error:
                     access_errors.append(access_error)
                     report_crawl_progress(

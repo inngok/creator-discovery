@@ -252,14 +252,9 @@ def search_new_instagram_candidates(
     browser = None
     with sync_playwright() as p:
         try:
-            browser = p.chromium.launch(headless=True, args=[
-                "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-            ])
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800},
-            )
+            from app.crawlers.instagram_session import create_instagram_context
+            context = create_instagram_context(p)
+            browser = context.browser
             page = context.new_page()
             Stealth().apply_stealth_sync(page)
             sources = [(kw, "hashtag", "https://www.instagram.com/explore/tags/" + urllib.parse.quote(tag, safe="") + "/")
@@ -322,8 +317,17 @@ def search_new_instagram_candidates(
                         f"Instagram: xong '{kw}' trên {source}, có {counts.get(kw, 0)} ứng viên đã xác minh.",
                         platform="INSTAGRAM", keyword=kw, stage="search_complete",
                     )
-                except TopicVerificationUnavailable as error:
-                    raise InstagramDiscoveryError(str(error)) from error
+                except TopicVerificationUnavailable:
+                    # AI không khả dụng: giữ ứng viên hiện tại cần duyệt thủ công, tiếp tục source tiếp theo
+                    try:
+                        _cand = cand  # noqa: F821  – defined in loop above when exception fires
+                        _cand["requires_manual_review"] = True
+                        if evaluate_tier0_search_card(_cand)[0] and _cand not in discovered:
+                            discovered.append(_cand)
+                            counts[kw] = counts.get(kw, 0) + 1
+                    except Exception:
+                        pass
+                    continue
                 except Exception as error:
                     errors.append(f"{source}: {type(error).__name__}: {str(error)[:200]}")
                     logger.warning("Instagram %s unavailable: %s", source, type(error).__name__)

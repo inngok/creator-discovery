@@ -201,7 +201,14 @@ def _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requ
                             if len(found) >= max_total or count >= max_per_keyword:
                                 break
                     except TopicVerificationUnavailable:
-                        raise
+                        # AI không khả dụng: giữ ứng viên để xét duyệt thủ công, không hủy session
+                        candidate["requires_manual_review"] = True
+                        if evaluate_tier0_search_card(candidate)[0]:
+                            found.append(candidate)
+                        count += 1
+                        if len(found) >= max_total or count >= max_per_keyword:
+                            break
+                        continue
                     except Exception as error:
                         logger.warning(
                             "TikTok indexed search failed for %s: %s",
@@ -399,7 +406,14 @@ def search_new_tiktok_candidates(
                             break
 
                     except TopicVerificationUnavailable:
-                        raise
+                        # AI không khả dụng: đánh dấu ứng viên cần duyệt, tiếp tục keyword tiếp theo
+                        cand["requires_manual_review"] = True
+                        if evaluate_tier0_search_card(cand)[0]:
+                            cand["platform"] = "TIKTOK"
+                            discovered.append(cand)
+                            seen_usernames.add(key)
+                            kw_count += 1
+                        continue
                     except Exception as kw_err:
                         search_errors.append(f"{kw}: {type(kw_err).__name__}: {str(kw_err)[:250]}")
                         logger.warning(f"[DISCOVERY] Lỗi khi quét từ khóa '{kw}': {kw_err}")
@@ -412,8 +426,6 @@ def search_new_tiktok_candidates(
                         continue
 
             browser.close()
-        except TopicVerificationUnavailable as error:
-            raise TikTokDiscoveryError(str(error)) from error
         except Exception as e:
             search_errors.append(f"Playwright: {type(e).__name__}")
             logger.error(f"[DISCOVERY] Lỗi khởi tạo Playwright Discovery: {e}")
@@ -428,8 +440,6 @@ def search_new_tiktok_candidates(
             discovered = _search_indexed_tiktok_candidates(
                 keywords, max_per_keyword, max_total, requested_category
             )
-        except TopicVerificationUnavailable as error:
-            raise TikTokDiscoveryError(str(error)) from error
         except Exception as error:
             search_errors.append(f"Indexed search: {type(error).__name__}: {str(error)[:250]}")
             logger.warning("TikTok indexed fallback unavailable: %s", type(error).__name__)

@@ -275,9 +275,10 @@ def get_llm_enrichment(prompt: str) -> dict | None:
     if keys_status["GEMINI"]:
         fallback_models.extend(
             [
-                "gemini/gemini-3.1-flash-lite",
-                "gemini/gemini-3.1-flash-lite-preview",
+                os.getenv("GEMINI_PRIMARY_MODEL", "gemini/gemini-flash-lite-latest"),
+                "gemini/gemini-3.5-flash",
                 "gemini/gemini-3-flash-preview",
+                "gemini/gemini-3.1-flash-lite",
                 "gemini/gemma-4-26b-a4b-it",
             ]
         )
@@ -299,6 +300,7 @@ def get_llm_enrichment(prompt: str) -> dict | None:
                 fallbacks=fallback_models[1:] if len(fallback_models) > 1 else [],
                 timeout=30,
                 num_retries=0,
+                response_format={"type": "json_object"},
             )
 
             if response and response.choices:

@@ -273,3 +273,57 @@ class TikTokDiscoveryOrderTest(unittest.TestCase):
         with patch.dict("sys.modules", {"app.ai.analyzer": fake}):
             self.assertFalse(discovery._trending_matches_topic(
                 {"topic_evidence_text": "Travel guide to the mountains"}, "travel"))
+
+    def test_search_strips_leading_hash_before_typing(self):
+        page = MagicMock()
+        discovery._open_tiktok_discovery_page(page, "#review công nghệ")
+        search = page.locator.return_value.first
+        search.fill.assert_called_once_with("review công nghệ", timeout=10000)
+
+    def test_explore_no_creator_evidence_lead_is_rejected_and_reported(self):
+        from app.core.crawl_progress import (
+            reset_discovery_rejection_callback,
+            set_discovery_rejection_callback,
+        )
+
+        rejections = []
+        token = set_discovery_rejection_callback(rejections.append)
+
+        def fake_verify(candidate):
+            candidate["creator_check"] = {
+                "decision": "SKIP_INSUFFICIENT",
+                "primary_type": "UNKNOWN",
+                "reason_codes": ["NO_CREATOR_EVIDENCE"],
+            }
+            candidate["requires_manual_review"] = True
+            candidate["_verified_snapshot"] = {
+                "platform": "TIKTOK",
+                "username": candidate["username"],
+                "profile": {"unique_id": candidate["username"], "followers": 55000},
+                "posts": [],
+            }
+            return True
+
+        page = MagicMock()
+        page.content.side_effect = [
+            "", "", "",
+            self.card("random_explore_channel", "Daily unrelated viral video"),
+        ]
+        context = MagicMock()
+        context.new_page.return_value = page
+        try:
+            with patch.object(discovery, "sync_playwright"), \
+                 patch.object(discovery, "_init_discovery_context", return_value=(MagicMock(), context)), \
+                 patch.object(discovery, "Stealth"), \
+                 patch.object(discovery, "_open_tiktok_discovery_page"), \
+                 patch("app.services.crawled_result_service.get_crawled_tiktok_identifiers", return_value=set()), \
+                 patch.object(discovery, "_search_indexed_tiktok_candidates", return_value=[]), \
+                 patch.object(discovery, "_verify_tiktok_candidate_followers", side_effect=fake_verify):
+                results = discovery.search_new_tiktok_candidates(["review công nghệ"], max_total=1, requested_category="TECH")
+        finally:
+            reset_discovery_rejection_callback(token)
+
+        self.assertEqual(results, [])
+        self.assertEqual([r["username"] for r in rejections], ["random_explore_channel"])
+        self.assertEqual(rejections[0]["decision"], "AUTO_REJECT")
+        self.assertFalse(rejections[0]["database_synced"])

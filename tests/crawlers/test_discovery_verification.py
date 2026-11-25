@@ -278,3 +278,34 @@ class DiscoveryVerificationTest(unittest.TestCase):
         self.assertEqual(result["decision"], Decision.AUTO_ACCEPT_KOL.value)
         self.assertTrue(result["database_synced"])
         send_to_database.assert_called_once()
+
+    def test_topic_evidence_preserves_hashtags_and_accepts_grounded_078_confidence(self):
+        profile, posts, _ = self.profile([
+            "Chuột nhẹ #reviewcongnghe",
+            "Phím êm #setupbanlamviec",
+            "Màn hình đẹp #reviewcongnghe",
+            "Tai nghe ngon #techreview",
+            "Loa mini #docongnghe",
+        ])
+        candidate = {
+            "username": "creator",
+            "platform": "TIKTOK",
+            "search_keyword": "review công nghệ",
+            "topic_evidence_text": "Chuột nhẹ #reviewcongnghe",
+        }
+        with patch("app.services.live_fetcher_service.fetch_raw_creator_profile", return_value=(profile, posts, None)):
+            self.assertTrue(_verify_tiktok_candidate_followers(candidate))
+
+        self.assertTrue(any("#reviewcongnghe" in p["caption"] for p in candidate["topic_evidence_posts"]))
+        answer = {
+            "matches": True,
+            "creatorType": "KOC",
+            "confidence": 0.78,
+            "topicEvidence": [
+                {"postId": "0", "quote": "Chuột nhẹ #reviewcongnghe"},
+                {"postId": "1", "quote": "Phím êm #setupbanlamviec"},
+            ],
+        }
+        fake = SimpleNamespace(get_llm_enrichment=lambda _: answer)
+        with patch.dict("sys.modules", {"app.ai.analyzer": fake}):
+            self.assertTrue(matches_requested_topic(candidate, "Công nghệ; review công nghệ"))

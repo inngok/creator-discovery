@@ -7,7 +7,11 @@ from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
-from app.core.crawl_progress import report_crawl_progress
+from app.core.crawl_progress import (
+    build_discovery_rejection_result,
+    report_crawl_progress,
+    report_discovery_rejection,
+)
 from app.crawlers.search_extractor import evaluate_tier0_search_card
 from app.crawlers.tiktok_discovery import _run_profile_check
 from app.services.discovery_verification import (
@@ -160,6 +164,14 @@ def search_new_facebook_candidates(
                         if not _run_profile_check(verify_discovery_profile, cand):
                             continue
                         if not matches_requested_topic(cand, f"{requested_category or ''}; {kw}"):
+                            report_discovery_rejection(build_discovery_rejection_result(
+                                cand,
+                                reason_codes=[
+                                    *((cand.get("creator_check") or {}).get("reason_codes") or []),
+                                    "TOPIC_NOT_MATCHED",
+                                ],
+                                summary_reason=f"Nội dung chưa đủ bằng chứng khớp chủ đề '{kw or requested_category or ''}'.",
+                            ))
                             continue
                         discovered.append(cand)
                         kw_count += 1

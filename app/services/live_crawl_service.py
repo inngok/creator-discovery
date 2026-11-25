@@ -28,7 +28,7 @@ def _apply_verified_topic_auto_accept(
     confidence = topic_accept.get("confidence")
     evidence = topic_accept.get("evidence")
     if (creator_type not in {"KOC", "KOL"} or type(confidence) not in {int, float}
-            or not math.isfinite(confidence) or not 0.85 <= confidence <= 1
+            or not math.isfinite(confidence) or not 0.75 <= confidence <= 1
             or not isinstance(evidence, list)):
         return result
     snapshot_posts = verified_snapshot.get("posts")
@@ -45,7 +45,7 @@ def _apply_verified_topic_auto_accept(
         if not isinstance(item, dict):
             continue
         post_id, quote = item.get("postId"), item.get("quote")
-        if (isinstance(post_id, str) and isinstance(quote, str) and len(quote.strip()) >= 12
+        if (isinstance(post_id, str) and isinstance(quote, str) and len(quote.strip()) >= 10
                 and quote.casefold() in sources.get(post_id, "").casefold()):
             proven_posts.add(post_id)
     if len(proven_posts) < 2:

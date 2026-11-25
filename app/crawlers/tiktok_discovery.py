@@ -8,7 +8,11 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_pla
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
-from app.core.crawl_progress import report_crawl_progress
+from app.core.crawl_progress import (
+    build_discovery_rejection_result,
+    report_crawl_progress,
+    report_discovery_rejection,
+)
 from app.services.discovery_verification import TopicVerificationUnavailable
 from app.crawlers.search_extractor import (
     evaluate_tier0_search_card,
@@ -192,9 +196,23 @@ def _search_indexed_tiktok_candidates(keywords, max_per_keyword, max_total, requ
                                     keyword=keyword,
                                     stage="topic_rejected",
                                 )
+                                report_discovery_rejection(build_discovery_rejection_result(
+                                    candidate,
+                                    reason_codes=[
+                                        *((candidate.get("creator_check") or {}).get("reason_codes") or []),
+                                        "TOPIC_NOT_MATCHED",
+                                    ],
+                                    summary_reason=f"Nội dung chưa đủ bằng chứng khớp chủ đề '{keyword or requested_category or ''}'.",
+                                ))
                                 continue
                             _mark_topic_auto_accept(candidate)
-                            if not evaluate_tier0_search_card(candidate)[0]:
+                            tier0_ok, tier0_reason = evaluate_tier0_search_card(candidate)
+                            if not tier0_ok:
+                                report_discovery_rejection(build_discovery_rejection_result(
+                                    candidate,
+                                    reason_codes=[tier0_reason],
+                                    summary_reason=f"Bị lọc ở bước Tier-0 ({tier0_reason}).",
+                                ))
                                 continue
                             found.append(candidate)
                             count += 1
@@ -268,7 +286,8 @@ def _open_tiktok_discovery_page(page, keyword: str | None):
     if not search.is_visible():
         page.locator('[data-e2e="nav-search"]:visible').first.click(timeout=10000)
     search.wait_for(state="visible", timeout=15000)
-    search.fill(keyword.strip(), timeout=10000)
+    search_query = keyword.strip().lstrip("#").strip() or keyword.strip()
+    search.fill(search_query, timeout=10000)
     search.press("Enter", timeout=10000)
     try:
         page.wait_for_url("**/search**", wait_until="domcontentloaded", timeout=5000)
@@ -328,6 +347,11 @@ def search_new_tiktok_candidates(
                 for source in sources:
                     if len(discovered) >= max_total or verified_count >= verification_budget:
                         break
+                    source_budget = (
+                        (per_keyword_budget if max_total <= 1 else max(6, verification_budget // max(1, len(keywords or [""]))))
+                        if source == "search"
+                        else (2 if kw.strip() else per_keyword_budget)
+                    )
                     try:
                         report_crawl_progress(
                             f"TikTok: {'nhập từ khóa vào ô tìm kiếm' if source == 'search' else 'quét video trending trên Khám phá'}: '{kw}'.",
@@ -352,11 +376,17 @@ def search_new_tiktok_candidates(
                                 cand["source"] = "TIKTOK_UI_SEARCH" if source == "search" else "TIKTOK_EXPLORE"
                                 cand["search_keyword"] = kw
                                 cand["requested_category"] = requested_category
-                                if not evaluate_tier0_search_card(cand)[0]:
+                                tier0_ok, tier0_reason = evaluate_tier0_search_card(cand)
+                                if not tier0_ok:
+                                    report_discovery_rejection(build_discovery_rejection_result(
+                                        cand,
+                                        reason_codes=[tier0_reason],
+                                        summary_reason=f"Bị lọc trên kết quả tìm kiếm ({tier0_reason}).",
+                                    ))
                                     continue
                                 # One matching video cannot establish a creator account.
                                 if key not in checked_profiles:
-                                    if verified_count >= verification_budget or kw_verified_count >= per_keyword_budget:
+                                    if verified_count >= verification_budget or kw_verified_count >= source_budget:
                                         break
                                     verified_count += 1
                                     kw_verified_count += 1
@@ -366,6 +396,17 @@ def search_new_tiktok_candidates(
                                     continue
                                 cand = {**checked_profiles[key], "search_keyword": kw,
                                         "source": "TIKTOK_UI_SEARCH" if source == "search" else "TIKTOK_EXPLORE"}
+                                if (
+                                    source == "trending"
+                                    and (requested_category or kw.strip())
+                                    and "NO_CREATOR_EVIDENCE" in ((cand.get("creator_check") or {}).get("reason_codes") or [])
+                                ):
+                                    report_discovery_rejection(build_discovery_rejection_result(
+                                        cand,
+                                        reason_codes=["EXPLORE_NO_CREATOR_EVIDENCE"],
+                                        summary_reason="Ứng viên từ Khám phá chung chưa có bằng chứng nhà sáng tạo rõ ràng.",
+                                    ))
+                                    continue
                                 topic = f"{requested_category or ''}; {kw}"
                                 if (requested_category or kw.strip()) and not _trending_matches_topic(cand, topic):
                                     report_crawl_progress(
@@ -374,6 +415,14 @@ def search_new_tiktok_candidates(
                                         keyword=kw,
                                         stage="topic_rejected",
                                     )
+                                    report_discovery_rejection(build_discovery_rejection_result(
+                                        cand,
+                                        reason_codes=[
+                                            *((cand.get("creator_check") or {}).get("reason_codes") or []),
+                                            "TOPIC_NOT_MATCHED",
+                                        ],
+                                        summary_reason=f"Nội dung chưa đủ bằng chứng khớp chủ đề '{kw or requested_category or ''}'.",
+                                    ))
                                     continue
                                 _mark_topic_auto_accept(cand)
                                 if not evaluate_tier0_search_card(cand)[0]:
@@ -386,7 +435,7 @@ def search_new_tiktok_candidates(
                                     break
                             if (kw_count >= max_per_keyword or len(discovered) >= max_total
                                     or verified_count >= verification_budget
-                                    or kw_verified_count >= per_keyword_budget):
+                                    or kw_verified_count >= source_budget):
                                 break
                             if viewport < 2:
                                 page.mouse.wheel(0, 650)
@@ -443,6 +492,26 @@ def search_new_tiktok_candidates(
         except Exception as error:
             search_errors.append(f"Indexed search: {type(error).__name__}: {str(error)[:250]}")
             logger.warning("TikTok indexed fallback unavailable: %s", type(error).__name__)
+    elif len(discovered) < max_total and any(k.strip() for k in keywords) and verified_count < verification_budget:
+        report_crawl_progress(
+            f"TikTok: đang tìm bổ sung {max_total - len(discovered)} kênh từ hashtag/tìm kiếm dự phòng.",
+            platform="TIKTOK",
+            stage="indexed_fallback",
+        )
+        try:
+            extra = _search_indexed_tiktok_candidates(
+                keywords, max_per_keyword, max_total - len(discovered), requested_category
+            )
+            existing_keys = {c.get("username", "").strip().lstrip("@").casefold() for c in discovered}
+            for item in extra:
+                key = item.get("username", "").strip().lstrip("@").casefold()
+                if key and key not in existing_keys:
+                    discovered.append(item)
+                    existing_keys.add(key)
+                    if len(discovered) >= max_total:
+                        break
+        except Exception as error:
+            logger.warning("TikTok indexed supplement unavailable: %s", type(error).__name__)
 
     if not discovered and search_errors and not search_source_available:
         raise TikTokDiscoveryError("TikTok search and trending discovery failed: " + "; ".join(search_errors[:5]))

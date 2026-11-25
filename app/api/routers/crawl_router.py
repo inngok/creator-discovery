@@ -300,7 +300,11 @@ async def resolve_tiktok_author(req: ResolveAuthorRequest) -> dict:
 from app.services.category_discovery_service import category_discovery_service
 from app.services.live_crawl_service import crawl_single_koc_live
 from app.core.metrics_tracker import metrics_tracker
-from app.core.crawl_progress import report_crawl_progress
+from app.core.crawl_progress import (
+    report_crawl_progress,
+    reset_discovery_rejection_callback,
+    set_discovery_rejection_callback,
+)
 
 
 class TestScrapeRequest(BaseModel):
@@ -366,6 +370,8 @@ async def test_scrape_koc(req: TestScrapeRequest) -> dict:
 async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
     target_candidates: list[dict[str, Any]] = []
 
+    rejected_candidates: list[dict[str, Any]] = []
+
     # 1. Nếu người dùng tự nhập danh sách username/link
     if req.usernames:
         for u in req.usernames[:req.max_channels]:
@@ -380,6 +386,17 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         from app.crawlers.discovery_crawler import (
             FacebookDiscoveryError, TikTokDiscoveryError, InstagramDiscoveryError,
         )
+        seen_rejected: set[tuple[str, str]] = set()
+
+        def _collect_rejection(item: dict[str, Any]) -> None:
+            uname = (item.get("username") or "").strip().lstrip("@").casefold()
+            plat = (item.get("platform") or req.platform).upper()
+            if not uname or (plat, uname) in seen_rejected:
+                return
+            seen_rejected.add((plat, uname))
+            rejected_candidates.append(item)
+
+        rejection_token = set_discovery_rejection_callback(_collect_rejection)
         try:
             report_crawl_progress(
                 f"Đang tìm hồ sơ theo {len(req.keywords) if req.keywords else 0} từ khóa.",
@@ -394,6 +411,24 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
             )
         except (FacebookDiscoveryError, TikTokDiscoveryError, InstagramDiscoveryError) as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+        finally:
+            reset_discovery_rejection_callback(rejection_token)
+
+    accepted_keys = {
+        (
+            c.get("platform", req.platform).upper(),
+            (c.get("username") or "").strip().lstrip("@").casefold(),
+        )
+        for c in target_candidates
+    }
+    excluded_results = [
+        item
+        for item in rejected_candidates
+        if (
+            (item.get("platform") or req.platform).upper(),
+            (item.get("username") or "").strip().lstrip("@").casefold(),
+        ) not in accepted_keys
+    ][:15]
 
     report_crawl_progress(
         f"Hoàn tất tìm kiếm; có {len(target_candidates)} hồ sơ để xử lý.",
@@ -421,7 +456,7 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
                     "avg_latency_ms": 0.0,
                     "discovery_status": "NO_MATCHES",
                 },
-                "results": [],
+                "results": excluded_results,
                 "metrics": metrics_tracker.get_metrics_summary(),
             }
         raise HTTPException(status_code=400, detail="Vui lòng chọn ngành nghề hợp lệ hoặc nhập ít nhất 1 username/link để cào.")
@@ -474,6 +509,8 @@ async def batch_crawl_kocs(req: BatchCrawlRequest) -> dict:
         else:
             failed_count += 1
         results.append(res)
+
+    results.extend(excluded_results)
 
     avg_latency = round(total_latency / success_count, 2) if success_count > 0 else 0.0
 

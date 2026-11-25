@@ -140,6 +140,18 @@ class TikTokPostCollectionTest(unittest.TestCase):
         callback(response)
         self.assertEqual(posts, [])
 
+    def test_fast_discovery_fetch_bounds_scroll_count(self):
+        page = MagicMock()
+        context = MagicMock()
+        context.new_page.return_value = page
+        page.content.return_value = '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{}</script>'
+        with patch.object(preflight_fetcher, "sync_playwright"), \
+             patch.object(preflight_fetcher, "_init_playwright_context", return_value=(context, "")), \
+             patch.object(preflight_fetcher, "Stealth"):
+            with preflight_fetcher.fast_discovery_fetch():
+                preflight_fetcher.fetch_tiktok_ssr_raw_data("traveler")
+        self.assertLessEqual(page.evaluate.call_count, 2)
+
     def test_sparse_ai_evidence_preserves_rule_referral_to_manager(self):
         result = RuleDecisionResult(decision=Decision.NEEDS_MANAGER_REVIEW,
                                     primary_type="UNKNOWN", reason_codes=["KOC_POTENTIAL"])

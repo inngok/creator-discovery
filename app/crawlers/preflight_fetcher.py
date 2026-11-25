@@ -2,6 +2,8 @@ import json
 import os
 import re
 import urllib.parse
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
@@ -23,6 +25,17 @@ from app.crawlers.instagram_crawler import (
 from app.crawlers.tiktok_crawler import _init_playwright_context
 
 logger = setup_logger("preflight_fetcher")
+_fast_discovery_mode: ContextVar[bool] = ContextVar("fast_discovery_mode", default=False)
+
+
+@contextmanager
+def fast_discovery_fetch():
+    """Fetch only enough recent TikTok posts for discovery verification."""
+    token = _fast_discovery_mode.set(True)
+    try:
+        yield
+    finally:
+        _fast_discovery_mode.reset(token)
 
 
 def normalize_tiktok_item_list(items: list, username: str) -> list[dict]:
@@ -71,7 +84,11 @@ def normalize_tiktok_item_list(items: list, username: str) -> list[dict]:
     return [item for _, item in sorted(by_id.items(), key=order)]
 
 
-def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
+def fetch_tiktok_ssr_raw_data(
+    username: str,
+    max_posts: int | None = None,
+    max_scrolls: int | None = None,
+) -> dict | None:
     """
     Lightweight SSR Fetcher chung cho TikTok:
     - Tải DOM (`domcontentloaded`) với timeout ngắn.
@@ -80,6 +97,9 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
     - Chờ thẻ <script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"> chứa dữ liệu SSR profile.
     - Trả về dictionary dữ liệu SSR đã được parse kèm mảng itemList video.
     """
+    fast_mode = _fast_discovery_mode.get()
+    target_posts = max_posts if max_posts is not None else (18 if fast_mode else 60)
+    scroll_limit = max_scrolls if max_scrolls is not None else (2 if fast_mode else 8)
     clean_user = username.strip().removeprefix("@")
     if "tiktok.com" in clean_user:
         match = re.search(r"tiktok\.com/@?([^/?&#]+)", clean_user)
@@ -110,7 +130,7 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
                                     and author_name.casefold() != clean_user.casefold()):
                                 continue
                             post_id = str(item.get("id", "")).strip()
-                            if post_id and len(captured_posts) < 60 and post_id not in captured_ids:
+                            if post_id and len(captured_posts) < target_posts and post_id not in captured_ids:
                                 captured_posts.append(item)
                                 captured_ids.add(post_id)
                 except Exception as error:
@@ -128,21 +148,22 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
 
             # Cuộn xuống từng đợt để kích hoạt lazy-load các hàng video tiếp theo (tránh chỉ dừng ở 3 bài ghim đầu)
             idle_scrolls = 0
-            for _ in range(8):
-                if len(captured_posts) >= 60:
+            wait_steps = 4 if fast_mode else 6
+            for _ in range(scroll_limit):
+                if len(captured_posts) >= target_posts:
                     break
                 previous_count = len(captured_posts)
                 try:
                     page.evaluate("window.scrollBy(0, 1500);")
                 except Exception:
                     break
-                for _ in range(6):
+                for _ in range(wait_steps):
                     page.wait_for_timeout(250)
                     if len(captured_posts) > previous_count:
                         break
                 if len(captured_posts) == previous_count:
                     idle_scrolls += 1
-                    if idle_scrolls >= 2:
+                    if idle_scrolls >= (1 if fast_mode else 2):
                         break
                 else:
                     idle_scrolls = 0
@@ -174,9 +195,9 @@ def fetch_tiktok_ssr_raw_data(username: str) -> dict | None:
     if not isinstance(root_posts, list):
         root_posts = []
     dom_posts = []
-    if len(captured_posts) < 60:
+    if len(captured_posts) < target_posts:
         for a in soup.select("a[href*='/video/'], a[href*='/photo/']"):
-            if len(captured_posts) >= 60:
+            if len(captured_posts) + len(dom_posts) >= target_posts:
                 break
             href = a.get("href", "")
             if not re.search(r"/@" + re.escape(clean_user) + r"/(?:video|photo)/", href, re.IGNORECASE):

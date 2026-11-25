@@ -7,7 +7,11 @@ from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
 from app.core.logger import setup_logger
-from app.core.crawl_progress import report_crawl_progress
+from app.core.crawl_progress import (
+    build_discovery_rejection_result,
+    report_crawl_progress,
+    report_discovery_rejection,
+)
 from app.services.discovery_verification import TopicVerificationUnavailable
 from app.crawlers.search_extractor import (
     evaluate_tier0_search_card,
@@ -308,6 +312,15 @@ def search_new_instagram_candidates(
                             keyword=kw, stage="profile_verification",
                         )
                         if not _verify_instagram_candidate(cand, f"{requested_category or ''}; {kw}"):
+                            if cand.get("_verified_snapshot"):
+                                report_discovery_rejection(build_discovery_rejection_result(
+                                    cand,
+                                    reason_codes=[
+                                        *((cand.get("creator_check") or {}).get("reason_codes") or []),
+                                        "TOPIC_NOT_MATCHED",
+                                    ],
+                                    summary_reason=f"Nội dung chưa đủ bằng chứng khớp chủ đề '{kw or requested_category or ''}'.",
+                                ))
                             continue
                         discovered.append(cand)
                         counts[kw] = counts.get(kw, 0) + 1

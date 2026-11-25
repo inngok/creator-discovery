@@ -57,15 +57,30 @@ def _dispatch_enqueue(platform: str, username: str, force_deep_crawl: bool = Fal
             detail=f"Nền tảng {plat} không được hỗ trợ. Vui lòng chọn: {supported}",
         )
 
-    from app.core.candidate_staging import staging_repo
-    from app.ai.rules.rule_config import Decision
+    from app.core.candidate_staging import CandidateStagingRecord, staging_repo
+    from app.ai.rules.rule_config import Decision, ProcessingStatus
     existing = staging_repo.get_candidate(plat, clean_user)
     if existing and existing.decision == Decision.MANAGER_REJECTED:
         raise HTTPException(status_code=409, detail="Hồ sơ đã bị chuyên viên từ chối; không thể tự động đưa lại vào hàng đợi.")
     if force_deep_crawl and (not existing or existing.decision not in (
         Decision.AUTO_ACCEPT_KOC, Decision.AUTO_ACCEPT_KOL, Decision.MANAGER_APPROVED
     )):
-        raise HTTPException(status_code=409, detail="Hồ sơ chưa đủ điều kiện cào sâu. Cần phân loại và kiểm định trước.")
+        if existing:
+            staging_repo.update_status_and_decision(
+                plat,
+                clean_user,
+                status=ProcessingStatus.DEEP_CRAWL_QUEUED,
+                decision=Decision.MANAGER_APPROVED,
+            )
+        else:
+            staging_repo.upsert_candidate(
+                CandidateStagingRecord(
+                    platform=plat,
+                    username=clean_user,
+                    processing_status=ProcessingStatus.DEEP_CRAWL_QUEUED,
+                    decision=Decision.MANAGER_APPROVED,
+                )
+            )
 
     if is_redis_available():
         try:

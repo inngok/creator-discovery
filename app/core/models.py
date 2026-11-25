@@ -35,10 +35,10 @@ class Post(BaseModel):
     platformPostId: str
     postUrl: str
     caption: str
-    views: int | None = 0
-    likes: int | None = 0
-    comments: int | None = 0
-    shares: int | None = 0
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
     coverUrl: str | None = ""
     postedAt: str | None = None
 
@@ -67,45 +67,47 @@ class IngestPayload(BaseModel):
     observedAt: datetime = Field(default_factory=lambda: datetime.now(UTC))
     collectedAt: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    @property
-    def avg_views(self) -> float:
-        valid_vals = [p.views for p in self.recentPosts if p.views is not None]
-        return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+    def _avg_observed(self, field: str) -> float | None:
+        valid_vals = [getattr(p, field) for p in self.recentPosts if getattr(p, field) is not None]
+        return sum(valid_vals) / len(valid_vals) if valid_vals else None
 
     @property
-    def avg_likes(self) -> float:
-        valid_vals = [p.likes for p in self.recentPosts if p.likes is not None]
-        return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+    def avg_views(self) -> float | None:
+        return self._avg_observed("views")
 
     @property
-    def avg_comments(self) -> float:
-        valid_vals = [p.comments for p in self.recentPosts if p.comments is not None]
-        return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+    def avg_likes(self) -> float | None:
+        return self._avg_observed("likes")
 
     @property
-    def avg_shares(self) -> float:
-        valid_vals = [p.shares for p in self.recentPosts if p.shares is not None]
-        return sum(valid_vals) / len(valid_vals) if valid_vals else 0.0
+    def avg_comments(self) -> float | None:
+        return self._avg_observed("comments")
 
     @property
-    def engagement_rate(self) -> float:
+    def avg_shares(self) -> float | None:
+        return self._avg_observed("shares")
+
+    @property
+    def engagement_rate(self) -> float | None:
         followers = self.creator.followers
         if followers <= 0:
-            return 0.0
-        return (
-            (self.avg_likes + self.avg_comments + self.avg_shares) / followers
-        ) * 100
+            return None
+        observed = [v for v in (self.avg_likes, self.avg_comments, self.avg_shares) if v is not None]
+        if not observed:
+            return None
+        return (sum(observed) / followers) * 100
 
     @property
-    def engagement_rate_views(self) -> float:
+    def engagement_rate_views(self) -> float | None:
         """
         View-based Engagement Rate cho video ngắn (TikTok, Reels, Shorts):
         ER_views = (avgLikes + avgComments + avgShares) / avgViews * 100%
         """
         views = self.avg_views
-        if views <= 0:
-            return 0.0
-        return (
-            (self.avg_likes + self.avg_comments + self.avg_shares) / views
-        ) * 100.0
+        if views is None or views <= 0:
+            return None
+        observed = [v for v in (self.avg_likes, self.avg_comments, self.avg_shares) if v is not None]
+        if not observed:
+            return None
+        return (sum(observed) / views) * 100.0
 

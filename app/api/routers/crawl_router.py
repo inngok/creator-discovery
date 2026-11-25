@@ -289,6 +289,7 @@ class ResolveAuthorRequest(BaseModel):
 @router.post(
     "/tiktok/resolve-author",
     summary="Bóc tách Author ID TikTok qua SSR và đối soát KOC đổi tên",
+    response_description="Fresh SSR identity: numeric author_id, actual resolved_username, id_type=TIKTOK_USER_ID and observed_at UTC. Missing identity returns 404; input username is never used as proof.",
     description="Sử dụng Lightweight Preflight SSR để lấy Author ID (dãy số cố định) cho username TikTok mới (ví dụ: domixi), phục vụ đối soát với external_id trong DB khi KOC đổi tên trước khi đăng nhập TikTok OAuth.",
 )
 async def resolve_tiktok_author(req: ResolveAuthorRequest) -> dict:

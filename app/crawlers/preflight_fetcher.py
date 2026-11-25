@@ -4,7 +4,7 @@ import re
 import urllib.parse
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import UTC, datetime
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
@@ -253,7 +253,15 @@ def fetch_tiktok_author_info(username: str) -> dict | None:
         return None
 
     external_id = str(user_info.get("id", "")).strip()
-    unique_id = str(user_info.get("uniqueId", username.strip().removeprefix("@"))).strip()
+    unique_id = user_info.get("uniqueId")
+    if (
+        not re.fullmatch(r"[1-9][0-9]{0,19}", external_id)
+        or not isinstance(unique_id, str)
+        or not unique_id.strip()
+    ):
+        return None
+    unique_id = unique_id.strip()
+    observed_at = datetime.now(UTC).isoformat()
     display_name = user_info.get("nickname", unique_id)
     sec_uid = str(user_info.get("secUid", "")).strip()
     followers = int(stats_module.get("followerCount", 0))
@@ -282,6 +290,8 @@ def fetch_tiktok_author_info(username: str) -> dict | None:
 
     return {
         "author_id": external_id,
+        "id_type": "TIKTOK_USER_ID",
+        "observed_at": observed_at,
         "unique_id": unique_id,
         "display_name": display_name,
         "sec_uid": sec_uid,

@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from app.ai.rules.rule_config import Decision, ProcessingStatus, MAX_PREFLIGHT_RETRIES, RULE_VERSION
 from app.ai.rules.rule_engine import RuleDecisionResult, RuleEngine
@@ -203,7 +204,13 @@ class PreflightService:
 
         logger.info(f"[PREFLIGHT AUTHOR RESOLVER] Đang bóc tách SSR Author ID cho @{clean_user}...")
         author_info = fetch_tiktok_author_info(clean_user)
-        if not author_info or not author_info.get("author_id"):
+        if (
+            not author_info
+            or not re.fullmatch(r"[1-9][0-9]{0,19}", str(author_info.get("author_id", "")))
+            or not author_info.get("unique_id")
+            or author_info.get("id_type") != "TIKTOK_USER_ID"
+            or not author_info.get("observed_at")
+        ):
             logger.warning(f"[PREFLIGHT AUTHOR RESOLVER] Không thể lấy Author ID từ SSR cho @{clean_user}")
             return {
                 "status": "error",
@@ -213,7 +220,7 @@ class PreflightService:
             }
 
         author_id = author_info["author_id"]
-        resolved_username = author_info.get("unique_id") or clean_user
+        resolved_username = author_info["unique_id"]
         display_name = author_info.get("display_name", "")
 
         is_matched = None
@@ -277,6 +284,8 @@ class PreflightService:
             "input_username": clean_user,
             "resolved_username": resolved_username,
             "author_id": author_id,
+            "id_type": author_info["id_type"],
+            "observed_at": author_info["observed_at"],
             "sec_uid": author_info.get("sec_uid", ""),
             "expected_external_id": expected_external_id,
             "is_matched": is_matched,

@@ -1,3 +1,4 @@
+import math
 import re
 from datetime import UTC
 from app.core.post_dates import post_evidence_order
@@ -6,6 +7,15 @@ from app.core.confidence import compute_data_confidence
 from app.core.fee_benchmark import get_estimated_fee
 from app.core.location_resolver import resolve_location
 from app.core.models import IngestPayload
+
+
+def _percent_to_ratio(value: float | None) -> float | None:
+    """Convert percentage ER (e.g. 5.0 = 5%) to Java canonical decimal ratio (0.05)."""
+    if value is None or not math.isfinite(value) or value < 0.0:
+        return None
+    if value == 0.0:
+        return 0.0
+    return round(value / 100.0, 6)
 
 
 class JavaMapper:
@@ -19,10 +29,10 @@ class JavaMapper:
                     "platformPostId": p.platformPostId,
                     "postUrl": p.postUrl,
                     "caption": p.caption,
-                    "views": p.views or 0,
-                    "likes": p.likes or 0,
-                    "comments": p.comments or 0,
-                    "shares": p.shares or 0,
+                    "views": p.views,
+                    "likes": p.likes,
+                    "comments": p.comments,
+                    "shares": p.shares,
                     "postedAt": p.postedAt or "",
                 }
             )
@@ -66,13 +76,13 @@ class JavaMapper:
             avatar_url=result.creator.avatarUrl or "",
             bio=result.creator.bio or "",
             followers=result.creator.followers or 0,
-            avg_views=result.avg_views or 0.0,
-            avg_likes=result.avg_likes or 0.0,
+            avg_views=result.avg_views if result.avg_views is not None else 0.0,
+            avg_likes=result.avg_likes if result.avg_likes is not None else 0.0,
             category=category,
             niche=niche,
             contact=getattr(result.creator, "publicEmail", None) or getattr(result.creator, "publicPhone", None) or "",
             recent_posts=result.recentPosts or [],
-            er=result.engagement_rate or 0.0,
+            er=result.engagement_rate if result.engagement_rate is not None else 0.0,
         )
 
         # 4. Tra cứu giá ước tính tham khảo theo followers (Declarative 0 if-else)
@@ -99,8 +109,8 @@ class JavaMapper:
             "avgLikes": result.avg_likes,
             "avgComments": result.avg_comments,
             "avgShares": result.avg_shares,
-            "engagementRate": result.engagement_rate,
-            "engagementRateViews": result.engagement_rate_views,
+            "engagementRate": _percent_to_ratio(result.engagement_rate),
+            "engagementRateViews": _percent_to_ratio(result.engagement_rate_views),
             "niche": niche,
             "contentSummary": content_summary,
             "contact": getattr(result.creator, "publicEmail", None) or "",

@@ -27,6 +27,32 @@
   "niches": [
     {"code":"SKINCARE","category":"BEAUTY","aliases":["Chăm sóc da","Chăm sóc da & Skincare","Dưỡng da","Review skincare"]},
     {"code":"HAIRCARE","category":"BEAUTY","aliases":["Chăm sóc tóc","Chăm sóc và tạo mẫu tóc"]},
-    {"code":"MAKEUP","category":"BEAUTY","aliases":["Trang điểm","Trang điểm & Mỹ phẩm"]}
+    {"code":"MAKEUP","category":"BEAUTY","aliases":["Trang điểm","Trang điểm & Mỹ phẩm"]},
+    {"code":"FRAGRANCE","category":"BEAUTY","aliases":["Nước hoa","Body mist"]},
+    {"code":"WOMENSWEAR","category":"FASHION","aliases":["Thời trang nữ","Đồ nữ","Váy đầm"]},
+    {"code":"MENSWEAR","category":"FASHION","aliases":["Thời trang nam","Đồ nam"]},
+    {"code":"FOOTWEAR","category":"FASHION","aliases":["Giày dép nữ","Giày dép nam","Sneaker"]},
+    {"code":"ACCESSORIES","category":"FASHION","aliases":["Phụ kiện thời trang","Túi xách","Trang sức"]},
+    {"code":"COOKING","category":"FOOD","aliases":["Nấu ăn","Công thức nấu ăn","Vào bếp"]},
+    {"code":"FOOD_REVIEW","category":"FOOD","aliases":["Review đồ ăn","Review ẩm thực","Ăn vặt"]},
+    {"code":"BEVERAGE","category":"FOOD","aliases":["Đồ uống","Pha chế","Cà phê","Trà sữa"]},
+    {"code":"SMARTPHONE","category":"TECH","aliases":["Điện thoại","Review điện thoại"]},
+    {"code":"PC_LAPTOP","category":"TECH","aliases":["Laptop","PC","Máy tính"]},
+    {"code":"GADGETS","category":"TECH","aliases":["Phụ kiện công nghệ","Đồ công nghệ","Đánh giá công nghệ"]},
+    {"code":"HOME_APPLIANCE","category":"HOME","aliases":["Đồ gia dụng thông minh","Review gia dụng"]},
+    {"code":"HOME_DECOR","category":"HOME","aliases":["Decor","Nội thất","Nhà cửa nội thất"]},
+    {"code":"DAILY_VLOG","category":"LIFESTYLE","aliases":["Vlog đời sống","Đời sống cá nhân","Cuộc sống hàng ngày"]},
+    {"code":"DOMESTIC_TRAVEL","category":"TRAVEL","aliases":["Du lịch trong nước","Review du lịch","Check-in"]},
+    {"code":"BABY_CARE","category":"MOTHER_BABY","aliases":["Chăm sóc bé","Đồ cho bé","Sữa tã"]},
+    {"code":"PARENTING","category":"MOTHER_BABY","aliases":["Làm mẹ","Nuôi dạy con","Mẹ bầu"]},
+    {"code":"FITNESS","category":"HEALTH","aliases":["Tập gym","Yoga","Giảm cân","Thể hình"]},
+    {"code":"NUTRITION","category":"HEALTH","aliases":["Dinh dưỡng","Thực phẩm chức năng","Eat clean"]},
+    {"code":"PET_CARE","category":"PETS","aliases":["Chó mèo","Thức ăn thú cưng"]},
+    {"code":"COMEDY","category":"ENTERTAINMENT","aliases":["Tiểu phẩm","Video hài"]},
+    {"code":"LANGUAGE_LEARNING","category":"EDUCATION","aliases":["Học tiếng Anh","Học ngoại ngữ","IELTS"]},
+    {"code":"STUDY_TIPS","category":"EDUCATION","aliases":["Đồ dùng học tập","Học tập","Chia sẻ kiến thức"]},
+    {"code":"MOBILE_GAMING","category":"GAMING","aliases":["Game mobile","Liên Quân","PUBG Mobile"]},
+    {"code":"MOTORBIKE","category":"AUTOMOTIVE","aliases":["Xe máy","Bảo dưỡng xe máy","Độ xe"]},
+    {"code":"PERSONAL_FINANCE","category":"FINANCE","aliases":["Tài chính cá nhân","Tiết kiệm","Đầu tư"]}
   ]
 }

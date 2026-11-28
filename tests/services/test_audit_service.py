@@ -18,6 +18,9 @@ class TestAuditService(unittest.TestCase):
     def setUp(self):
         self.service = AuditService()
         self.client = TestClient(app)
+        normalization_key = patch.dict(os.environ, {"DB_NORMALIZATION_API_KEY": "normalization-test-key"})
+        normalization_key.start()
+        self.addCleanup(normalization_key.stop)
         staging = patch("app.services.audit_service.staging_repo")
         self.staging = staging.start()
         self.staging.get_candidate.return_value = None
@@ -227,7 +230,7 @@ class TestAuditService(unittest.TestCase):
 
     def test_api_batch_reclassify_and_report_endpoints(self):
         # Test GET /api/v1/quality/audit-report
-        res_report = self.client.get("/api/v1/quality/audit-report")
+        res_report = self.client.get("/api/v1/quality/audit-report", headers={"X-Service-Key": "normalization-test-key"})
         self.assertEqual(res_report.status_code, 200)
 
         # Test POST /api/v1/quality/batch-reclassify with mock audit_batch
@@ -247,8 +250,10 @@ class TestAuditService(unittest.TestCase):
                 "offset": 0,
                 "dry_run": True,
                 "auto_quarantine": True,
+                "mode": "RECLASSIFY",
             }
-            res_post = self.client.post("/api/v1/quality/batch-reclassify", json=payload)
+            res_post = self.client.post("/api/v1/quality/batch-reclassify", json=payload,
+                                        headers={"X-Service-Key": "normalization-test-key"})
             self.assertEqual(res_post.status_code, 200)
             data = res_post.json()
             self.assertEqual(data["runId"], "audit-test")
@@ -260,7 +265,69 @@ class TestAuditService(unittest.TestCase):
                 category=None,
                 dry_run=True,
                 auto_quarantine=True,
+                recheck_taxonomy=True,
             )
+
+    def test_postgres_audit_cannot_reingest_stored_rows_or_overwrite_staging(self):
+        creator = {"id": "creator", "platform": "TIKTOK", "username": "public_review",
+            "source": "POSTGRESQL", "creatorType": "KOC", "followers": 25000,
+            "observedAt": "2020-01-01T00:00:00Z", "category": "BEAUTY", "niche": "Gia dụng",
+            "posts": [{"platformPostId": str(i), "caption": f"Review máy hút bụi {i}, ưu điểm sạch, nhược điểm ồn"} for i in range(5)]}
+        with patch("app.services.audit_service.java_client.send_creator_data") as send:
+            result = self.service.audit_single_creator(creator, dry_run=False)
+        send.assert_not_called()
+        self.staging.upsert_candidate.assert_not_called()
+        self.assertFalse(result["syncedToJava"])
+        self.assertEqual(result["normalizedCategory"], "HOME")
+        self.assertEqual(result["oldType"], "KOC")
+        self.assertEqual(result["status"], "PROPOSED_RECLASSIFICATION")
+        self.assertTrue(result["requiresHumanReview"])
+
+    def test_postgres_failure_never_returns_staging_as_database_evidence(self):
+        with patch.object(self.service, "_get_pg_connection", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "PostgreSQL audit connection unavailable"):
+                self.service.fetch_creators_to_audit()
+        self.staging.list_candidates.assert_not_called()
+
+    def test_dry_run_without_posts_never_recrawls_missing_evidence(self):
+        with patch("app.services.audit_service.fetch_tiktok_preflight") as fetch:
+            self.service.audit_single_creator({"platform": "TIKTOK", "username": "missing", "posts": []}, dry_run=True)
+        fetch.assert_not_called()
+
+    def test_taxonomy_recheck_uses_public_quotes_instead_of_stored_wrong_labels(self):
+        from app.core.models import Post
+        posts = [Post(platformPostId="one", postUrl="", caption="Review mì trộn ngon ở quán đầu ngõ"),
+                 Post(platformPostId="two", postUrl="", caption="Món bún bò này có nước dùng rất ngon")]
+        answer = {"category": "FOOD", "niche": "Thực phẩm", "confidence": 0.95,
+                  "evidence": [{"postId": p.platformPostId, "quote": p.caption} for p in posts]}
+        with patch("app.ai.analyzer.get_llm_enrichment", return_value=answer) as model:
+            result = self.service.propose_taxonomy_from_evidence(posts)
+        self.assertEqual((result["category"], result["niche"]), ("FOOD", "FOOD"))
+        self.assertTrue(result["requiresHumanReview"])
+        self.assertIn(posts[0].caption, model.call_args.args[0])
+
+    def test_taxonomy_recheck_normalizes_separator_variants_of_category_aliases(self):
+        from app.core.models import Post
+        posts = [Post(platformPostId="one", postUrl="", caption="Chia sẻ đồ dùng cho mẹ và bé"),
+                 Post(platformPostId="two", postUrl="", caption="Kinh nghiệm chăm sóc trẻ sơ sinh")]
+        answer = {"category": "MOTHER_BABY", "niche": "MẸ_VÀ_BÉ", "confidence": 0.95,
+                  "evidence": [{"postId": p.platformPostId, "quote": p.caption} for p in posts]}
+        with patch("app.ai.analyzer.get_llm_enrichment", return_value=answer):
+            result = self.service.propose_taxonomy_from_evidence(posts)
+        self.assertEqual((result["category"], result["niche"]), ("MOTHER_BABY", "MOTHER_BABY"))
+
+    def test_hallucinated_quotes_and_contradictory_categories_cannot_become_proposals(self):
+        from app.core.models import Post
+        posts = [Post(platformPostId="one", postUrl="", caption="Review mì trộn ngon ở quán đầu ngõ"),
+                 Post(platformPostId="two", postUrl="", caption="Món bún bò này có nước dùng rất ngon")]
+        for answer in [
+            {"category": "FOOD", "niche": "FOOD", "confidence": 0.99,
+             "evidence": [{"postId": "one", "quote": "A fabricated quote about food"}]},
+            {"category": "BEAUTY", "niche": "Thực phẩm", "confidence": 0.99, "evidence": []},
+            {"category": "FOOD", "niche": "FOOD", "confidence": float("nan"), "evidence": []},
+        ]:
+            with patch("app.ai.analyzer.get_llm_enrichment", return_value=answer):
+                self.assertNotEqual(self.service.propose_taxonomy_from_evidence(posts)["status"], "PROPOSED")
 
 
 if __name__ == "__main__":

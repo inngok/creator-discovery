@@ -8,6 +8,13 @@ from app.ai.creator_classifier import classify_creator_type_smart
 
 
 class GroundedCreatorEvidenceTest(unittest.TestCase):
+    def test_pet_and_home_labels_are_accepted_with_the_same_contract_as_discovery(self):
+        for code, source in [("PETS", "Review thức ăn dành riêng cho mèo nhà mình"),
+                             ("HOME", "Review máy hút bụi dùng trong căn bếp nhỏ")]:
+            answer = {"categoryFallback": code, "labelEvidence": [source],
+                      "nicheLabels": [{"label": code, "evidence": [source]}]}
+            self.assertEqual(resolve_grounded_fallback_labels("UNKNOWN", "UNKNOWN", answer, [source]), (code, code))
+
     def test_summary_uses_actual_skincare_captions_not_invented_travel(self):
         caption = "Review kem chống nắng cho da dầu và cách dùng mỗi ngày"
         summary = build_content_summary("Booking: person@example.test", [caption])
@@ -52,6 +59,41 @@ class GroundedCreatorEvidenceTest(unittest.TestCase):
 
 
 class AnalyzerGroundingIntegrationTest(unittest.TestCase):
+    def test_local_llm_selection_never_falls_back_to_cloud_providers(self):
+        from app.ai import analyzer
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"category":"FOOD"}'))])
+        with patch.dict("os.environ", {
+            "LOCAL_LLM_MODEL": "qwen3:4b",
+            "OLLAMA_API_BASE": "http://127.0.0.1:11434",
+            "GEMINI_API_KEY": "must-not-be-used",
+            "GROQ_API_KEY": "must-not-be-used",
+            "OPENAI_API_KEY": "must-not-be-used",
+        }), patch.object(analyzer.litellm, "completion", return_value=response) as completion:
+            result = analyzer.get_llm_enrichment("local test prompt")
+
+        self.assertEqual(result, {"category": "FOOD"})
+        self.assertEqual(completion.call_count, 1)
+        self.assertEqual(completion.call_args.kwargs["model"], "ollama/qwen3:4b")
+        self.assertEqual(completion.call_args.kwargs["api_base"], "http://127.0.0.1:11434")
+        self.assertFalse(completion.call_args.kwargs["think"])
+        self.assertEqual(completion.call_args.kwargs["temperature"], 0)
+        self.assertNotIn("fallbacks", completion.call_args.kwargs)
+
+    def test_local_llm_failure_does_not_send_prompt_to_cloud(self):
+        from app.ai import analyzer
+        with patch.dict("os.environ", {
+            "LOCAL_LLM_MODEL": "qwen3:4b",
+            "GEMINI_API_KEY": "must-not-be-used",
+            "GROQ_API_KEY": "must-not-be-used",
+            "OPENAI_API_KEY": "must-not-be-used",
+        }), patch.object(analyzer.litellm, "completion", side_effect=RuntimeError("offline")) as completion:
+            result = analyzer.get_llm_enrichment("private caption")
+
+        self.assertIsNone(result)
+        self.assertEqual(completion.call_count, 1)
+        self.assertEqual(completion.call_args.kwargs["model"], "ollama/qwen3:4b")
+
     def enrich(self, creator_type, with_quotes):
         from app.ai import analyzer
         from app.core.models import CreatorInfo

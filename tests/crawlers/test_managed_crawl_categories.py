@@ -17,6 +17,7 @@ class ManagedCrawlCategoriesTest(unittest.TestCase):
         self.assertEqual(res[0]["username"], "beauty_koc")
         mock_tiktok.assert_called_once()
         self.assertIn("Làm đẹp", mock_tiktok.call_args.kwargs["keywords"])
+        self.assertEqual(mock_tiktok.call_args.kwargs["requested_category"], "BEAUTY")
 
     @patch("app.crawlers.discovery_crawler.search_new_facebook_candidates")
     @patch("app.crawlers.discovery_crawler.search_new_tiktok_candidates")

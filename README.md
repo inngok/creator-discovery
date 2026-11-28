@@ -1,5 +1,102 @@
 # InfluencerMatch Crawler API
 
+## Normalize existing PostgreSQL data
+
+The existing `/api/v1/quality/batch-reclassify` check now defaults to `mode=NORMALIZE`
+and `dry_run=true`. It reads PostgreSQL only and returns a saved before/after plan.
+`mode=RECLASSIFY` keeps content/type recommendations, but stored PostgreSQL rows are
+never sent back through ingestion or silently replaced with staging SQLite records.
+An audit is not a fresh crawl and is not a claim that an old AI classification is correct.
+
+Configure `NORMALIZATION_DATABASE_URL` in the crawler environment, or explicitly set
+`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` and `DB_PASSWORD` / `DB_PASS`. No hardcoded
+remote database or staging fallback is used. The connection must target the same database
+as the backend. Set the same `DB_NORMALIZATION_API_KEY` on backend and crawler; otherwise
+the existing shared creator-ingestion service key is used. The frontend uses a Data Manager
+JWT against the backend, rather than receiving an internal service key:
+
+- `POST /api/v1/data/crawler/db-normalization/preview`: e.g. `{"limit":100,"platform":"TIKTOK"}`.
+- `GET /api/v1/data/crawler/db-normalization/reports/{runId}`: saved evidence and proposed changes.
+- `POST /api/v1/data/crawler/db-normalization/apply`: `{"planId":"normalize-..."}`.
+- `POST /api/v1/data/crawler/db-normalization/reclassify`: e.g. `{"limit":5}`;
+  rechecks actual captions and returns category proposals with at least two verbatim post excerpts.
+- `GET /api/v1/data/crawler/db-normalization/content-report`: latest content audit and its evidence.
+
+Content reclassification can call the configured AI service; normalization does not. Old database
+labels are not supplied as evidence. Proposals require supported, consistent category/niche values,
+confidence of at least 0.85 and two different stored posts with verifiable excerpts. Unavailable AI
+or insufficient evidence is reported explicitly. These proposals require human review and are not
+automatically written by normalization apply. The backend proxy always forces this mode read-only.
+
+For private-data reclassification, run Ollama locally and configure `LOCAL_LLM_MODEL` (for example,
+`qwen3:4b`) and optionally `OLLAMA_API_BASE` (default `http://127.0.0.1:11434`). When
+`LOCAL_LLM_MODEL` is set, enrichment uses only that Ollama model; failures do not fall back to
+Gemini, Groq, or OpenAI. Leave `LOCAL_LLM_MODEL` unset to retain the existing cloud-provider
+cascade. Category proposals remain evidence-checked and require human review.
+
+For an operator running directly from this crawler checkout:
+
+```powershell
+python scripts/normalize_existing_db.py preview --all
+python scripts/normalize_existing_db.py apply --plan-id normalize-REPLACE_WITH_PREVIEW_ID
+```
+
+To reuse an existing backend environment file without copying credentials or changing either
+project's environment files, select it explicitly and supply its database host if omitted:
+
+```powershell
+python scripts/normalize_existing_db.py --env-file 'C:\InfluencerMatch\backend\.env' --host localhost preview --all
+```
+
+Use the same environment/host options for `apply`. Database URLs and separate `--host` overrides
+cannot be mixed. V19 databases without `creator.discovery_hidden` can be inspected without
+adding columns; if that schema or any protected evidence changes after preview, apply conflicts.
+
+Plans live under `data/db_normalization/`, expire after one hour and include the database
+target and contract hash. Pagination uses `nextAfterId` / `--after-id`; UUID order remains
+stable when category labels change. API replicas must share this report directory.
+
+Normalization derives category/niche codes from observed labels, recomputes ER from stored
+average interaction counts and followers, and replaces generated summaries with excerpts
+from the newest three stored posts. Missing counts do not become zero and missing evidence
+does not become KOC, Lifestyle or a new observation. Reviewed category/niche/type decisions
+are preserved. Old FRESH observations can become STALE and require a real recrawl.
+Stale embeddings are cleared when their content/classification changes; lexical retrieval
+remains available until a real crawl regenerates vectors. No crawling, LLM or embedding call
+is made by normalization.
+
+Apply locks creator then latest metric, rechecks the complete before-state and post evidence,
+and writes an `audit_log` entry with the before/after data in the same transaction. It never
+updates collectedAt, observedAt, posts, ownership, visibility, fees or profile identity.
+Repeated plans return ALREADY_APPLIED; concurrent recrawls/reviews return a conflict.
+Each creator commits independently, so inspect `appliedCount`, `conflictCount` and `applyResults`
+for partial runs. Reports flag cases needing content review; normalization statistics are not
+AI accuracy scores.
+
+## Shared creator discovery contract
+
+`app/contracts/creator-discovery-v1.json` is generated from the backend-owned contract.
+Category aliases, category search seeds, the 5,000 follower admission floor, three-post
+snapshot and embedding dimensions use this artifact. AI output and JavaMapper normalize
+observed labels identically to backend ingestion and discovery; crawl configuration is not
+classification evidence. Metrics and embedding evidence use the same newest three posts.
+JavaMapper sends ER as a ratio with explicit contract version and unit. Existing profiles
+may refresh below the admission floor; discovery excludes those profiles. Successful duplicate
+run acknowledgements are accepted as synchronized, rather than reported as failures.
+
+Sync/check from this crawler checkout:
+
+```powershell
+python scripts/sync_discovery_contract.py --backend-root 'C:\InfluencerMatch\backend'
+python scripts/sync_discovery_contract.py --backend-root 'C:\InfluencerMatch\backend' --check
+```
+
+The backend `docs/creator-discovery.md` describes deployment order and fixture export.
+Backend documentation generators also live here: `scripts/backend_docs/generate_diagrams.py`
+and `scripts/backend_docs/generate_states.py`; both require `--backend-root` and optionally
+accept `--output-dir`. The backend repository contains Java, SQL, JSON and documentation artifacts.
+Focused checks: `python -m unittest tests.services.test_discovery_contract tests.services.test_creator_activity_evidence tests.crawlers.test_managed_crawl_categories`.
+
 ## Creator activity evidence
 
 Post dates are normalized to UTC from ISO timestamps or Unix seconds/milliseconds.

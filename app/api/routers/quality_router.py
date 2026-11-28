@@ -3,9 +3,11 @@ import os
 import json
 import uuid
 import time
+import secrets
 from datetime import UTC, datetime
 from typing import Any, Optional
-from fastapi import APIRouter, HTTPException, Query
+from typing import Literal
+from fastapi import APIRouter, HTTPException, Query, Header
 from pydantic import BaseModel, Field
 
 from app.core.candidate_staging import staging_repo
@@ -13,6 +15,7 @@ from app.ai.rules.rule_config import Decision, ProcessingStatus
 from app.services.crawled_result_service import list_crawled_results, get_crawled_result_by_username
 from app.services.live_crawl_service import crawl_single_koc_live
 from app.services.audit_service import audit_service
+from app.services.db_normalization_service import db_normalization_service
 from app.core.logger import setup_logger
 from app.clients.java_client import java_client
 from app.mappers.java_mapper import JavaMapper
@@ -46,8 +49,31 @@ class BatchReclassifyRequest(BaseModel):
     offset: int = Field(0, ge=0, description="Offset phân trang")
     platform: Optional[str] = Field(None, description="Lọc theo nền tảng: TIKTOK, YOUTUBE, FACEBOOK, INSTAGRAM")
     category: Optional[str] = Field(None, description="Lọc theo ngành hàng (vd: Beauty, Lifestyle, Fashion...)")
-    dry_run: bool = Field(False, description="Nếu True: chỉ đánh giá và thống kê, không ghi đè DB / gửi Java Backend")
+    dry_run: bool = Field(True, description="Mặc định xem trước; False áp dụng chuẩn hóa xác định được từ dữ liệu đã lưu")
+    mode: Literal["NORMALIZE", "RECLASSIFY"] = Field("NORMALIZE", description="NORMALIZE sửa định dạng/chỉ số; RECLASSIFY chỉ đề xuất đánh giá lại nội dung DB")
+    recheck_taxonomy: bool = Field(True, description="Trong RECLASSIFY: đánh giá lại ngành từ caption gốc, cần ít nhất hai trích dẫn thật")
     auto_quarantine: bool = Field(True, description="Nếu True: tự động cô lập tài khoản Shop/Rác vào Staging")
+
+
+class NormalizationPreviewRequest(BaseModel):
+    limit: int = Field(100, ge=1, le=1000)
+    after_id: Optional[uuid.UUID] = None
+    platform: Optional[str] = Field(None, pattern="^(TIKTOK|FACEBOOK|INSTAGRAM|YOUTUBE)$")
+    category: Optional[str] = Field(None, max_length=120)
+    all_rows: bool = False
+
+
+class NormalizationApplyRequest(BaseModel):
+    plan_id: str = Field(..., pattern="^normalize-[0-9a-f]{32}$")
+    actor_id: Optional[uuid.UUID] = None
+
+
+def require_normalization_key(key):
+    configured = os.environ.get("DB_NORMALIZATION_API_KEY") or os.environ.get("JAVA_BACKEND_SECRET")
+    if not configured:
+        raise HTTPException(status_code=503, detail="DB normalization service key is not configured.")
+    if not key or not secrets.compare_digest(key, configured):
+        raise HTTPException(status_code=403, detail="DB normalization requires a service key; use the authenticated backend Data Manager endpoint.")
 
 
 # Lưu trạng thái xử lý conflicts vào file JSON bền vững
@@ -342,15 +368,26 @@ async def resolve_identity_conflict(conflict_id: str, req: ConflictResolveReques
 
 
 @router.post("/batch-reclassify", summary="Thẩm định & tái phân loại Creator hàng loạt trong DB")
-async def batch_reclassify_creators(req: BatchReclassifyRequest) -> dict[str, Any]:
+async def batch_reclassify_creators(req: BatchReclassifyRequest, x_service_key: Optional[str] = Header(None)) -> dict[str, Any]:
     """
-    Quét theo đợt các Creator đang lưu trong Database (PostgreSQL hoặc Staging SQLite):
-    - Kiểm tra và sàng lọc rác: Shop bán hàng sỉ lẻ, reup/spam, tài khoản bị xóa.
-    - Phân loại lại thông minh: Phân định chính xác KOC vs KOL dựa trên video & tương tác.
-    - Tính lại điểm chất lượng (dataConfidence): nguồn, độ tươi, độ đầy đủ, tính hợp lý.
-    - Sinh lại vector nhúng BKAI 768 chiều.
-    - Đồng bộ sang Java Backend nếu dry_run=False.
+    NORMALIZE tạo kế hoạch chuẩn hóa dữ liệu PostgreSQL, mặc định chỉ xem trước.
+    RECLASSIFY đọc caption gốc để đề xuất loại/ngành với trích dẫn xác thực; không ghi đè DB.
+    Không cào lại hoặc biến kiểm tra dữ liệu cũ thành lần quan sát mới.
+    Không kết nối được PostgreSQL sẽ báo lỗi thay vì trả dữ liệu staging thay thế.
     """
+    require_normalization_key(x_service_key)
+    if req.mode == "NORMALIZE":
+        try:
+            report = await asyncio.to_thread(db_normalization_service.preview, limit=req.limit,
+                offset=req.offset, platform=req.platform, category=req.category)
+            if not req.dry_run:
+                report = await asyncio.to_thread(db_normalization_service.apply, report["runId"])
+            return report
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except Exception as error:
+            logger.warning("Existing database normalization check failed: %s", type(error).__name__)
+            raise HTTPException(status_code=503, detail="Không xử lý được PostgreSQL đã cấu hình; không chuyển sang SQLite.") from error
     return await asyncio.to_thread(
         audit_service.audit_batch,
         limit=req.limit,
@@ -359,15 +396,57 @@ async def batch_reclassify_creators(req: BatchReclassifyRequest) -> dict[str, An
         category=req.category,
         dry_run=req.dry_run,
         auto_quarantine=req.auto_quarantine,
+        recheck_taxonomy=req.recheck_taxonomy,
     )
 
 
+@router.post("/db-normalization/preview", summary="Xem trước chuẩn hóa dữ liệu PostgreSQL đang có; không cào lại")
+async def preview_db_normalization(req: NormalizationPreviewRequest, x_service_key: Optional[str] = Header(None)) -> dict[str, Any]:
+    require_normalization_key(x_service_key)
+    try:
+        return await asyncio.to_thread(db_normalization_service.preview, limit=req.limit,
+            after_id=str(req.after_id) if req.after_id else None, platform=req.platform,
+            category=req.category, all_rows=req.all_rows)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.warning("Database normalization preview failed: %s", type(error).__name__)
+        raise HTTPException(status_code=503, detail="Không đọc được PostgreSQL đã cấu hình; không chuyển sang SQLite.") from error
+
+
+@router.post("/db-normalization/apply", summary="Áp dụng kế hoạch đã xem trước; kiểm tra lại snapshot và lưu audit log")
+async def apply_db_normalization(req: NormalizationApplyRequest, x_service_key: Optional[str] = Header(None)) -> dict[str, Any]:
+    require_normalization_key(x_service_key)
+    try:
+        return await asyncio.to_thread(db_normalization_service.apply, req.plan_id,
+                                       actor_id=str(req.actor_id) if req.actor_id else None)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Không tìm thấy kế hoạch chuẩn hóa.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except Exception as error:
+        logger.warning("Database normalization apply failed: %s", type(error).__name__)
+        raise HTTPException(status_code=503, detail="Không ghi được PostgreSQL đã cấu hình.") from error
+
+
+@router.get("/db-normalization/reports/{plan_id}", summary="Đọc bản trước/sau và kết quả áp dụng đã lưu")
+async def get_db_normalization_report(plan_id: str, x_service_key: Optional[str] = Header(None)) -> dict[str, Any]:
+    require_normalization_key(x_service_key)
+    try:
+        return await asyncio.to_thread(db_normalization_service.report, plan_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Không tìm thấy báo cáo chuẩn hóa.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @router.get("/audit-report", summary="Lấy báo cáo thẩm định DB gần nhất")
-async def get_latest_audit_report() -> dict[str, Any]:
+async def get_latest_audit_report(x_service_key: Optional[str] = Header(None)) -> dict[str, Any]:
     """
     Xem thống kê bao nhiêu % dữ liệu đạt chuẩn, bao nhiêu kênh rác bị phát hiện
     từ đợt quét thẩm định gần nhất.
     """
+    require_normalization_key(x_service_key)
     return audit_service.get_latest_report()
 
 

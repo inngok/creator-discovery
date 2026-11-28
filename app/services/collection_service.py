@@ -20,6 +20,12 @@ def session_status(platform: str) -> dict:
             return {"platform": platform, "status": "SAVED_SESSION_UNVERIFIED",
                     "mode": "SAVED_SESSION", "requires_login": False,
                     "uses_saved_session": True, "remotely_verified": False}
+    if platform == "INSTAGRAM":
+        from app.crawlers.instagram_session import load_instagram_session
+        if load_instagram_session() is not None:
+            return {"platform": platform, "status": "SAVED_SESSION_UNVERIFIED",
+                    "mode": "SAVED_SESSION", "requires_login": False,
+                    "uses_saved_session": True, "remotely_verified": False}
     return {"platform": platform, "status": "PUBLIC_ACCESS_UNVERIFIED",
             "mode": "PUBLIC_ONLY", "requires_login": False,
             "uses_saved_session": False, "remotely_verified": False}

@@ -64,13 +64,19 @@ class DiscoveryVerificationTest(unittest.TestCase):
         accepted, _ = self.verify(["Review du lịch ưu điểm đẹp và nhược điểm đông"])
         self.assertFalse(accepted)
 
-    def test_consistent_review_creator_is_verified_even_below_old_7k_threshold(self):
+    def test_consistent_review_creator_is_verified_at_shared_5k_threshold(self):
         accepted, candidate = self.verify([
             f"Review du lịch địa điểm {i}, ưu điểm cảnh đẹp, nhược điểm đông người" for i in range(5)
-        ], followers=4950)
+        ], followers=5000)
         self.assertTrue(accepted)
         self.assertEqual(candidate["creator_check"]["primary_type"], "KOC")
         self.assertEqual(len(candidate["_verified_snapshot"]["posts"]), 5)
+
+    def test_review_creator_below_shared_admission_floor_is_rejected(self):
+        accepted, _ = self.verify([
+            f"Review du lịch địa điểm {i}, ưu điểm cảnh đẹp, nhược điểm đông người" for i in range(5)
+        ], followers=4999)
+        self.assertFalse(accepted)
 
     def test_fetch_identity_mismatch_is_not_accepted(self):
         data = self.profile(["Review du lịch ưu điểm đẹp"] * 5)

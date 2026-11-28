@@ -2,12 +2,14 @@
 import re
 
 from app.ai.fallback_labels import resolve_fallback_labels
+from app.core.discovery_contract import CONTRACT
 
 INSUFFICIENT_SUMMARY = "Chưa đủ nội dung công khai để tóm tắt."
 PRODUCT_GROUPS = frozenset({
     "Mỹ phẩm", "Trang phục", "Sức khỏe và Làm đẹp", "Gia dụng",
     "Thực phẩm", "Điện tử", "Mẹ và Bé",
-})
+} | {value for label in [*CONTRACT["categories"], *CONTRACT["niches"]]
+     for value in [label["code"], *label["aliases"]]})
 
 
 def resolve_product_groups(items, sources):
@@ -19,7 +21,7 @@ def resolve_product_groups(items, sources):
         if not isinstance(item, dict):
             continue
         label = item.get("label")
-        if label in PRODUCT_GROUPS and label not in labels and has_label_evidence(
+        if isinstance(label, str) and label in PRODUCT_GROUPS and label not in labels and has_label_evidence(
             {"labelEvidence": item.get("evidence")}, sources
         ):
             labels.append(label)

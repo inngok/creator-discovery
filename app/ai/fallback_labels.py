@@ -1,11 +1,10 @@
-VALID_CATEGORIES = frozenset({
-    "BEAUTY", "TECH", "FOOD", "FASHION", "LIFESTYLE", "AUTOMOTIVE",
-    "ENTERTAINMENT", "EDUCATION", "SPORTS", "GAMING",
-})
+from app.core.discovery_contract import CATEGORY_CODES, canonical_label
+
+VALID_CATEGORIES = CATEGORY_CODES
 
 
 def resolve_fallback_labels(category, niche, ai_data):
-    candidate = str(ai_data.get("categoryFallback") or "").strip().upper()
+    candidate = canonical_label(ai_data.get("categoryFallback"))
     if candidate in VALID_CATEGORIES:
         category = candidate
     candidate_niche = ai_data.get("nicheFallback")

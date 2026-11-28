@@ -46,8 +46,8 @@ def parse_instagram_number(val: str) -> int:
 
 
 def _init_instagram_playwright_context(p) -> tuple[BrowserContext, None]:
-    from app.crawlers.public_browser import create_public_context
-    return create_public_context(p, "INSTAGRAM"), None
+    from app.crawlers.instagram_session import create_instagram_context
+    return create_instagram_context(p), None
 
 
 def extract_instagram_posts_from_soup(soup: BeautifulSoup, max_posts: int = 5) -> tuple[List[Post], str]:

@@ -37,7 +37,9 @@ class JavaClient:
             try:
                 res_json = response.json()
                 data_obj = res_json.get("data", {})
-                if res_json.get("success") is False or not isinstance(data_obj, dict) or data_obj.get("status") != "SUCCESS":
+                if (res_json.get("success") is False or not isinstance(data_obj, dict)
+                        or data_obj.get("status") not in {"SUCCESS", "SKIPPED"}
+                        or not data_obj.get("creatorId")):
                     logger.warning("Backend did not confirm successful creator ingestion")
                     return False
             except (ValueError, AttributeError, TypeError):

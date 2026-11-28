@@ -19,6 +19,7 @@ from app.ai.schemas import PredictionResult
 from app.ai.grounded_enrichment import build_content_summary, has_label_evidence, resolve_grounded_fallback_labels
 from app.ai.services.embedding_service import embedding_service
 from app.core.models import AIEnrichment, CreatorInfo, Post
+from app.core.discovery_contract import CONTRACT, CATEGORY_CODES, canonical_label, normalize_classification
 from app.core.logger import setup_logger
 
 logger = setup_logger("ai_analyzer")
@@ -62,6 +63,13 @@ def _predict_category(text: str) -> PredictionResult:
             label="UNKNOWN", confidence=0.0, engine="FALLBACK", needs_review=True
         )
 
+    trained_codes = {canonical_label(str(label)) for label in cat_classes} if cat_classes is not None else set()
+    partial_taxonomy = not CATEGORY_CODES.issubset(trained_codes)
+    if partial_taxonomy and not CATEGORY_PROTOTYPES:
+        # A two-class model's confidence does not distinguish food/pets/etc. from beauty/fashion.
+        # Let grounded enrichment or human review establish a category instead of forcing a label.
+        return PredictionResult(label="UNKNOWN", confidence=0.0, engine="PARTIAL_TAXONOMY", needs_review=True)
+
     try:
         # Encode text thanh Vector
         X = embedding_service.get_embedding(text)
@@ -78,7 +86,8 @@ def _predict_category(text: str) -> PredictionResult:
 
         top1_prob = probs[top1_idx]
         top2_prob = probs[top2_idx]
-        predicted_label = cat_classes[top1_idx]
+        predicted_label = str(cat_classes[top1_idx])
+        predicted_code = canonical_label(predicted_label)
 
         # 1. Probability margin
         margin = top1_prob - top2_prob
@@ -88,7 +97,7 @@ def _predict_category(text: str) -> PredictionResult:
 
         predicted_sim = 0.0
 
-        proto_text = CATEGORY_PROTOTYPES.get(predicted_label, "")
+        proto_text = CATEGORY_PROTOTYPES.get(predicted_label, "") or CATEGORY_PROTOTYPES.get(predicted_code, "")
         if proto_text:
             proto_emb = embedding_service.get_embedding(proto_text)
             proto_emb = np.array(proto_emb).flatten()
@@ -99,7 +108,7 @@ def _predict_category(text: str) -> PredictionResult:
                 predicted_sim = np.dot(x_flat, proto_emb) / denom
 
         # 3. Ensemble Decision (Open-set thresholds)
-        is_unknown = False
+        is_unknown = predicted_code not in CATEGORY_CODES or (partial_taxonomy and not proto_text)
         if top1_prob < CATEGORY_UNKNOWN_THRESHOLD or margin < MARGIN_THRESHOLD or proto_text and predicted_sim < SEMANTIC_THRESHOLD:
             is_unknown = True
 
@@ -112,7 +121,7 @@ def _predict_category(text: str) -> PredictionResult:
             )
 
         return PredictionResult(
-            label=predicted_label,
+            label=predicted_code,
             confidence=float(top1_prob),
             engine="ENSEMBLE",
             needs_review=False,
@@ -264,6 +273,35 @@ from app.ai.training_db import save_training_data
 
 
 def get_llm_enrichment(prompt: str) -> dict | None:
+    local_model = os.getenv("LOCAL_LLM_MODEL", "").strip()
+    if local_model:
+        local_api_base = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434").strip()
+        try:
+            response = litellm.completion(
+                model=f"ollama/{local_model}",
+                api_base=local_api_base,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=120,
+                num_retries=0,
+                response_format={"type": "json_object"},
+                temperature=0,
+                think=False,
+            )
+            if response and response.choices:
+                response_text = response.choices[0].message.content
+                logger.info(f"[+] Local AI model served enrichment: {local_model}")
+            else:
+                response_text = None
+        except Exception as local_error:
+            logger.warning(
+                "Local AI enrichment failed for model %s: %s",
+                local_model,
+                type(local_error).__name__,
+            )
+            return None
+    else:
+        response_text = None
+
     # --- DYNAMIC MULTI-PROVIDER CASCADE (LITELLM) ---
     keys_status = {
         "GEMINI": bool(os.environ.get("GEMINI_API_KEY")),
@@ -272,7 +310,7 @@ def get_llm_enrichment(prompt: str) -> dict | None:
     }
 
     fallback_models = []
-    if keys_status["GEMINI"]:
+    if not local_model and keys_status["GEMINI"]:
         fallback_models.extend(
             [
                 os.getenv("GEMINI_PRIMARY_MODEL", "gemini/gemini-flash-lite-latest"),
@@ -283,13 +321,12 @@ def get_llm_enrichment(prompt: str) -> dict | None:
             ]
         )
 
-    if keys_status["GROQ"]:
+    if not local_model and keys_status["GROQ"]:
         fallback_models.append("groq/llama-3.3-70b-versatile")
-    if keys_status["OPENAI"]:
+    if not local_model and keys_status["OPENAI"]:
         fallback_models.append("openai/gpt-4o-mini")
 
-    response_text = None
-    if fallback_models:
+    if not local_model and fallback_models:
         try:
             logger.info(
                 f"[*] Dang yeu cau LiteLLM dieu phoi AI (Uu tien: {fallback_models[0]})..."
@@ -407,9 +444,11 @@ def process_ai_enrichment(
         try:
             prompt = f"""
             Dựa trên Bio: '{bio}' và các Caption: '{captions}', và đang sở hữu {creator_info.followers} followers. 
-            Phân loại kênh vào 1-3 nhóm sản phẩm thực sự xuất hiện trong nội dung.
+            Phân loại kênh vào 1-3 ngành/ngách có nội dung công khai thực sự được chứng minh.
             Mỗi nhóm phải có bằng chứng riêng, xếp nhóm chính trước; không điền đủ 3 nhóm nếu không có bằng chứng.
-            Không lấy nghề nghiệp, chủ đề đời sống hay từ khóa quảng cáo chung làm nhóm sản phẩm.
+            Không lấy nghề nghiệp hay từ khóa quảng cáo rời rạc làm bằng chứng.
+            Thức ăn/vật dụng dành cho thú cưng thuộc PETS, không phải FOOD chỉ vì có chữ thức ăn.
+            Đồ gia dụng thuộc HOME, không phải FOOD chỉ vì được dùng trong nhà bếp.
             Hãy phân tích và trả về ĐÚNG định dạng JSON sau (không kèm markdown ```json hay text khác):
             {{
                 "contentEvidence": ["Trích nguyên văn nội dung có thật trong Caption/Bio; không thêm chủ đề hay trải nghiệm không có trong nguồn"],
@@ -420,12 +459,15 @@ def process_ai_enrichment(
             """
             if needs_fallback:
                 prompt += """,
-                "categoryFallback": "Một trong 10 Category (BEAUTY, TECH, FOOD, FASHION, LIFESTYLE, AUTOMOTIVE, ENTERTAINMENT, EDUCATION, SPORTS, GAMING)",
-                "nicheLabels": [{"label": "Chọn đúng tên nhóm: Mỹ phẩm, Trang phục, Sức khỏe và Làm đẹp, Gia dụng, Thực phẩm, Điện tử, Mẹ và Bé", "evidence": ["Trích nguyên văn Caption/Bio chứng minh riêng nhóm này"]}],
+                "categoryFallback": "Một trong các mã ngành: CATEGORY_CODES_FROM_CONTRACT",
+                "nicheLabels": [{"label": "Chọn một mã ngành/ngách: NICHE_CODES_FROM_CONTRACT", "evidence": ["Trích nguyên văn Caption/Bio chứng minh riêng nhãn này"]}],
                 "labelEvidence": ["Trích nguyên văn câu trong Caption/Bio chứng minh ngành/ngách; thiếu bằng chứng trả mảng rỗng"],
                 "creatorTypeFallback": "Chọn 1 trong 4 loại: KOL (người nổi tiếng, chuyên gia, nghệ sĩ, có sức ảnh hưởng, thường >100k followers), KOC (tập trung review sản phẩm, unbox, gắn link affiliate, chốt đơn, mọi mức follower), BRAND (tài khoản chính thức công ty/thương hiệu), USER (người bình thường chia sẻ đời sống cá nhân, không có yếu tố thương mại)"
                 """
             prompt += "\n}"
+            prompt = prompt.replace("CATEGORY_CODES_FROM_CONTRACT", ", ".join(sorted(CATEGORY_CODES)))
+            prompt = prompt.replace("NICHE_CODES_FROM_CONTRACT", ", ".join(sorted(
+                set(CATEGORY_CODES) | {label["code"] for label in CONTRACT["niches"]})))
 
             ai_data = get_llm_enrichment(prompt)
 
@@ -468,6 +510,7 @@ def process_ai_enrichment(
     except Exception:
         pass
 
+    category, niche = normalize_classification(category, niche)
     return AIEnrichment(
         niche=niche,
         category=category,

@@ -32,21 +32,39 @@ class CreatorActivityEvidenceTest(unittest.TestCase):
             username="creator", displayName="Creator", profileUrl="https://example.test/creator", followers=1000),
             source="PUBLIC", recentPosts=posts,
             observedAt=datetime(2024, 1, 1, 7, tzinfo=timezone(timedelta(hours=7))))
-        with patch("app.mappers.java_mapper.embedding_service.get_search_embedding", return_value=[]):
+        with patch("app.mappers.java_mapper.embedding_service.get_search_embedding", return_value=[0.0] * 768):
             return JavaMapper.from_ingest_payload(payload)
+
+    def test_mapper_rejects_an_embedding_with_wrong_dimensions(self):
+        payload = IngestPayload(creator=CreatorInfo(platform=Platform.TIKTOK, externalId="123",
+            username="creator", displayName="Creator", profileUrl="https://example.test/creator", followers=1000),
+            source="PUBLIC")
+        with patch("app.mappers.java_mapper.embedding_service.get_search_embedding", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "exactly 768 dimensions"):
+                JavaMapper.from_ingest_payload(payload)
+
+    def test_mapper_surfaces_embedding_generation_failure(self):
+        payload = IngestPayload(creator=CreatorInfo(platform=Platform.TIKTOK, externalId="123",
+            username="creator", displayName="Creator", profileUrl="https://example.test/creator", followers=1000),
+            source="PUBLIC")
+        with patch("app.mappers.java_mapper.embedding_service.get_search_embedding",
+                   side_effect=RuntimeError("model unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "model unavailable"):
+                JavaMapper.from_ingest_payload(payload)
 
     def test_pinned_posts_do_not_hide_newer_activity_from_java_snapshot(self):
         posts = [self.post(str(i), f"2024-01-0{i}T00:00:00Z") for i in range(1, 5)]
         mapped = self.map_posts(posts)
         self.assertEqual([p["platformPostId"] for p in mapped["recentPosts"][:3]], ["4", "3", "2"])
         self.assertEqual(mapped["observedAt"], "2024-01-01T00:00:00")
+        self.assertEqual(len(mapped["recentPosts"]), 3)
         self.assertEqual([p.platformPostId for p in posts], ["1", "2", "3", "4"])
 
     def test_undated_evidence_does_not_displace_dated_recent_posts(self):
         mapped = self.map_posts([*[self.post(str(i), "2024-01-01") for i in range(4)],
                                  self.post("undated", None)])
         self.assertNotIn("undated", [p["platformPostId"] for p in mapped["recentPosts"][:3]])
-        self.assertEqual(mapped["recentPosts"][-1]["platformPostId"], "undated")
+        self.assertEqual(len(mapped["recentPosts"]), 3)
 
     def test_facebook_uses_explicit_article_timestamps(self):
         for element in ('<time datetime="2024-01-01T07:00:00+07:00"></time>',

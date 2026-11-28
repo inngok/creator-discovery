@@ -1,5 +1,6 @@
 import math
 import re
+import math
 from datetime import UTC
 from app.core.post_dates import post_evidence_order
 from app.ai.services.embedding_service import embedding_service
@@ -7,6 +8,7 @@ from app.core.confidence import compute_data_confidence
 from app.core.fee_benchmark import get_estimated_fee
 from app.core.location_resolver import resolve_location
 from app.core.models import IngestPayload
+from app.core.discovery_contract import CONTRACT, VERSION, MAX_RECENT_POSTS, EMBEDDING_DIMENSIONS, normalize_classification
 
 
 def _percent_to_ratio(value: float | None) -> float | None:
@@ -21,6 +23,10 @@ def _percent_to_ratio(value: float | None) -> float | None:
 class JavaMapper:
     @staticmethod
     def from_ingest_payload(result: IngestPayload) -> dict:
+        # Metrics, content evidence and the database snapshot describe the same newest three posts.
+        result = result.model_copy(update={"recentPosts": sorted(
+            result.recentPosts, key=post_evidence_order, reverse=True
+        )[:MAX_RECENT_POSTS]})
         recent_posts_list = []
         valid_captions = []
         for p in sorted(result.recentPosts, key=post_evidence_order, reverse=True):
@@ -34,6 +40,7 @@ class JavaMapper:
                     "comments": p.comments,
                     "shares": p.shares,
                     "postedAt": p.postedAt or "",
+                    "thumbnailUrl": p.coverUrl or None,
                 }
             )
             if p.caption and p.caption.strip():
@@ -46,6 +53,8 @@ class JavaMapper:
         )
         niche = (result.aiEnrichment.niche if result.aiEnrichment else None) or "UNKNOWN"
         category = (result.aiEnrichment.category if result.aiEnrichment else None) or "UNKNOWN"
+        category, niche = normalize_classification(category, niche)
+        creator_type = str(creator_type or "UNKNOWN").strip().upper()
         content_summary = (
             result.aiEnrichment.contentSummary
             if result.aiEnrichment and getattr(result.aiEnrichment, "contentSummary", None)
@@ -63,10 +72,11 @@ class JavaMapper:
         creator_search_text = "\n".join(text_parts)
 
         # 2. Sinh vector 768 chiều dùng mô hình BKAI
-        try:
-            embedding_vector = embedding_service.get_search_embedding(creator_search_text)
-        except Exception as emb_err:
-            embedding_vector = []
+        embedding_vector = embedding_service.get_search_embedding(creator_search_text)
+        if (not isinstance(embedding_vector, list) or len(embedding_vector) != EMBEDDING_DIMENSIONS
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                           for v in embedding_vector)):
+            raise ValueError(f"Creator embedding must contain exactly {EMBEDDING_DIMENSIONS} dimensions with finite values")
 
         # 3. Tính toán dataConfidence theo 4 thành phần quy đổi:
         # Data Confidence = (35% x Nguồn) + (30% x Độ tươi) + (20% x Độ đầy đủ) + (15% x Hợp lý)
@@ -89,6 +99,8 @@ class JavaMapper:
         est_fee_min, est_fee_max = get_estimated_fee(result.creator.followers)
 
         return {
+            "contractVersion": VERSION,
+            "engagementRateUnit": CONTRACT["engagementRateUnit"],
             "platform": result.creator.platform.value,
             "externalId": result.creator.externalId,
             "userName": result.creator.username.strip().lstrip("@").strip(),

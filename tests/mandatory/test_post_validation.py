@@ -241,6 +241,16 @@ class TestPostValidationAndSafeIngestion(unittest.TestCase):
         self.assertEqual(java_payload["creatorType"], "KOL")
         self.assertIn("Bác sĩ da liễu", java_payload["contentSummary"])
 
+    def test_java_mapper_converts_engagement_percent_to_decimal_ratio(self):
+        payload = self._create_mock_ingest_payload("engagement_unit_contract", followers=25000)
+
+        java_payload = JavaMapper.from_ingest_payload(payload)
+
+        self.assertAlmostEqual(
+            java_payload["engagementRate"],
+            payload.model_copy(update={"recentPosts": payload.recentPosts[:3]}).engagement_rate / 100,
+        )
+
     def test_tc21_refresh_flow_bypasses_follower_gate_and_no_duplicates(self):
         """TC21: Luồng Refresh tài khoản cũ (is_refresh=True) -> Cập nhật metrics, không tạo duplicate."""
         username = "existing_creator_tc21"
